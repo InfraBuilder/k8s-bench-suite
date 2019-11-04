@@ -94,7 +94,8 @@ NODECLIENT=$(kubectl get pod infrabuilder-iperf-tcp -o wide | tail -n 1| awk '{p
 debug 1 "Benchmark ran from $NODECLIENT to $NODESRV"
 
 debug 1 "Getting results"
-TCP_RESULT=$(kubectl logs infrabuilder-iperf-tcp| grep receiver| awk '{print $7}')
+#TCP_RESULT=$(kubectl logs infrabuilder-iperf-tcp| grep receiver| awk '{print $7}')
+kubectl logs infrabuilder-iperf-tcp
 
 #================================================
 #   _____   __                    _
@@ -110,6 +111,6 @@ kubectl delete pod/infrabuilder-iperf-server >/dev/null
 debug 1 "Deleting pod iperf client tcp"
 kubectl delete pod/infrabuilder-iperf-tcp > /dev/null
 
-echo "TCP=$TCP_RESULT"
+#echo "TCP=$TCP_RESULT"
 
 
