@@ -1,0 +1,412 @@
+#!/bin/bash
+###################################################################
+# @Description : Kubernetes Network Benchmark
+# @Author      : Alexis Ducastel <alexis@infrabuilder.com>
+# @License     : MIT
+###################################################################
+
+#==============================================================================
+# Utility functions
+#==============================================================================
+
+function logdate { date "+%Y-%m-%d %H:%M:%S"; }
+function fatal { echo "$(logdate) [FATAL] $@" >&2; cleanandexit 1; }
+function err { echo "$(logdate) [ERROR] $@" >&2; }
+function warn { [$DEBUG_LEVEL -ge 1 ] && echo "$(logdate) [WARNING] $@" >&2; }
+function info { [ $DEBUG_LEVEL -ge 2 ] && echo "$(logdate) [INFO] $@" >&2; }
+function debug { [ $DEBUG_LEVEL -ge 3 ] && echo "$(logdate) [DEBUG] $@" >&2; }
+
+function now { date +%s; }
+function cleanandexit {
+	for i in $RESSOURCE_TO_CLEAN_BEFORE_EXIT
+	do
+		$DEBUG && debug "Deleting resource $i"
+		kubectl delete $NAMESPACEOPT $i >/dev/null
+	done
+	exit $1
+}
+
+# Example : waitpod podname Running 60
+function waitpod {
+	POD=$1
+	PHASE=$2
+	TIMEOUT=$3
+	TMAX=$(( $(now) + $TIMEOUT ))
+	$DEBUG && debug "Waiting for pod $POD to be $PHASE until $TMAX"
+	while [ "$(now)" -lt "$TMAX" ]
+	do
+		CURRENTPHASE=$(kubectl get --request-timeout 2s $NAMESPACEOPT pod $POD -o jsonpath={.status.phase})
+		$DEBUG && debug "[$(now)/$TMAX] Pod $POD is in phase $CURRENTPHASE, waiting for $PHASE"
+		[ "$CURRENTPHASE" = "$PHASE" ] && return 0
+		sleep 1
+	done
+	return 1
+}
+
+#==============================================================================
+# Default config
+#==============================================================================
+
+DEBUG=false
+DEBUG_LEVEL=0
+SERVER_NODE=""
+CLIENT_NODE=""
+EXECID="$$"
+NAMESPACEOPT=""
+POD_WAIT_TIMEOUT="30"
+BENCHMARK_DURATION="10"
+SOCKET_BUFFER_SIZE="256K"
+RESSOURCE_TO_CLEAN_BEFORE_EXIT=""
+
+#==============================================================================
+# Default config
+#==============================================================================
+
+function usage {
+	cat <<-EOF
+
+	$0 is a network benchmark tool for Kubernetes CNI
+	
+	Mandatory flags :
+	    -cn <nodename>
+	    --client-node <nodename> : Define kubernetes node name that will host the client part
+	    -sn <nodename>
+	    --server-node <nodename> : Define kubernetes node name that will host the server part
+	
+	Optionnal flags :
+	    --debug : Set the debug level to "debug"
+	    --debug-level <level> : Set the debug level (values : standard, warn, info, debug) 
+	    -d <time-in-scd>
+	    --duration <time-in-scd> : Set the benchmark duration for each test in seconds. (Default ${BENCHMARK_DURATION})
+	    -h
+	    --help : Display this help message
+	    -n <namespace>
+	    --namespace <namespace> : Set the target kubernetes namespace
+	    -sbs <size>
+	    --socket-buffer-size <size> : Set the socket buffer size (Default: $SOCKET_BUFFER_SIZE)
+	    -t <time-in-scd>
+	    --timeout <time-in-scd> : Set the pod ready wait timeout in seconds. (Default ${POD_WAIT_TIMEOUT})
+	    -v
+	    --verbose : Activate the verbose mode by setting debug-level to 'info'
+
+	Example : $0 -cn node1 -sn node2
+
+EOF
+}
+
+#==============================================================================
+# Argument parsing
+#==============================================================================
+
+[ "$1" = "" ] && usage && exit
+
+UNKNOWN_ARGLIST=""
+while [ "$1" != "" ]
+do
+	arg=$1
+	case $arg in
+		--server-node|-sn)
+			shift
+			SERVER_NODE=$1
+			info "Server node will be '$SERVER_NODE'"
+			;;
+		--client-node|-cn)
+			shift
+			CLIENT_NODE=$1
+			info "Client node will be '$CLIENT_NODE'"
+			;;
+		--namespace|-n)
+			shift
+			NAMESPACEOPT="--namespace $1"
+			info "Setting target namespace to '$1'"
+			;;
+		--timeout|-t)
+			shift
+			POD_WAIT_TIMEOUT="$1"
+			info "Setting timeout to ${1}s"
+			;;
+		--socket-buffer-size|-sbs)
+			shift
+			SOCKET_BUFFER_SIZE="$1"
+			info "Setting socket buffer size to ${1}"
+			;;
+		--duration|-d)
+			shift
+			BENCHMARK_DURATION="$1"
+			info "Setting benchmark duration to ${1}s"
+			;;
+		--verbose|-v)
+			DEBUG_LEVEL=2
+			;;
+		--debug)
+			DEBUG_LEVEL=3
+			;;
+		--debug-level)
+			shift
+			case $1 in
+				standard|0) DEBUG_LEVEL=0; DEBUG=false;;
+				warn|1) DEBUG_LEVEL=1; DEBUG=false;;
+				info|2) DEBUG_LEVEL=2; DEBUG=false;;
+				debug|3) DEBUG_LEVEL=3; DEBUG=true;;
+				*) fatal "Unknown debug level '$1'. Here is a list of acceptable debug levels : standard, warn, info, debug";;
+			esac
+			;;
+		--help|-h)
+			usage && exit
+			;;
+		*) UNKNOWN_ARGLIST="$UNKNOWN_ARGLIST $arg" ;;
+	esac
+	shift
+done
+
+[ "$UNKNOWN_ARGLIST" != "" ] && fatal "Unknown arguments : $UNKNOWN_ARGLIST"
+$DEBUG && debug "Argument parsing done"
+
+#==============================================================================
+# Preflight checks
+#==============================================================================
+
+[ "$SERVER_NODE" = "" -o "$CLIENT_NODE" = "" ] \
+	&& fatal "Both client node and server node must be set (--server-node and --client-node)"
+
+#==============================================================================
+# Starting server
+#==============================================================================
+
+SERVER_POD_NAME="knb-server-$EXECID"
+SERVER_SERVICE_NAME=$SERVER_POD_NAME
+$DEBUG && debug "Server pod name will be $SERVER_POD_NAME"
+
+info "Deploying iperf server on node $SERVER_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create server pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $SERVER_POD_NAME
+  name: $SERVER_POD_NAME
+spec:
+  containers:
+  - name: iperf
+    image: infrabuilder/netbench:server-iperf3
+    args:
+    - iperf3
+    - -s
+  nodeSelector:
+    kubernetes.io/hostname: $SERVER_NODE
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: $SERVER_SERVICE_NAME
+spec:
+  selector:
+    app: $SERVER_POD_NAME
+  ports:
+    - protocol: TCP
+      port: 5201
+      targetPort: 5201
+      name: tcp
+    - protocol: UDP
+      port: 5201
+      targetPort: 5201
+      name: udp
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME"
+
+info Waiting for server to be running
+waitpod $SERVER_POD_NAME Running $POD_WAIT_TIMEOUT \
+	|| fatal "Failed to start server pod"
+
+SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_POD_NAME -o jsonpath={.status.podIP})
+$DEBUG && debug Server IP address is $SERVER_IP
+
+#==============================================================================
+# TCP benchmark : Pod to Pod
+#==============================================================================
+
+CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
+$DEBUG && debug "Client TCP P2P pod name will be $CLIENT_TCP_P2P_POD_NAME"
+
+info "Starting TCP P2P client benchmark on node $CLIENT_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create TCP P2P client pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $CLIENT_TCP_P2P_POD_NAME
+  name: $CLIENT_TCP_P2P_POD_NAME
+spec:
+  containers:
+  - name: iperf
+    image: infrabuilder/netbench:client
+    args:
+    - /bin/sh
+    - -c
+    - iperf3 -c $SERVER_IP -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
+  nodeSelector:
+    kubernetes.io/hostname: $CLIENT_NODE
+  restartPolicy: Never
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_TCP_P2P_POD_NAME"
+
+info "Waiting for TCP P2P benchmark to be completed"
+$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
+sleep $BENCHMARK_DURATION
+
+waitpod $CLIENT_TCP_P2P_POD_NAME Succeeded $POD_WAIT_TIMEOUT \
+	|| fatal "Failed to run tcp client server pod until timeout"
+
+TCP_P2P_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_TCP_P2P_POD_NAME | grep receiver| awk '{print $7}')
+info "TCP P2P bandwidth : $TCP_P2P_BANDWIDTH"
+
+#==============================================================================
+# UDP benchmark : Pod to Pod
+#==============================================================================
+
+CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
+$DEBUG && debug "Client UDP P2P pod name will be $CLIENT_UDP_P2P_POD_NAME"
+
+info "Starting UDPP2P client benchmark on node $CLIENT_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create UDP P2P client pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $CLIENT_UDP_P2P_POD_NAME
+  name: $CLIENT_UDP_P2P_POD_NAME
+spec:
+  containers:
+  - name: iperf
+    image: infrabuilder/netbench:client
+    args:
+    - /bin/sh
+    - -c
+    - iperf3 -u -b 0 -c $SERVER_IP -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
+  nodeSelector:
+    kubernetes.io/hostname: $CLIENT_NODE
+  restartPolicy: Never
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_UDP_P2P_POD_NAME"
+
+info "Waiting for UDP P2P benchmark to be completed"
+$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
+sleep $BENCHMARK_DURATION
+
+waitpod $CLIENT_UDP_P2P_POD_NAME Succeeded $POD_WAIT_TIMEOUT  \
+	|| fatal "Failed to run udp client server pod until timeout"
+
+UDP_P2P_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_UDP_P2P_POD_NAME | grep receiver| awk '{print $7}')
+info "UDP P2P bandwidth : $UDP_P2P_BANDWIDTH"
+
+#==============================================================================
+# TCP benchmark : Pod to Service
+#==============================================================================
+
+CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
+$DEBUG && debug "Client TCP P2S pod name will be $CLIENT_TCP_P2S_POD_NAME"
+
+info "Starting TCP client benchmark on node $CLIENT_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create TCP client pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $CLIENT_TCP_P2S_POD_NAME
+  name: $CLIENT_TCP_P2S_POD_NAME
+spec:
+  containers:
+  - name: iperf
+    image: infrabuilder/netbench:client
+    args:
+    - /bin/sh
+    - -c
+    - iperf3 -c $SERVER_SERVICE_NAME -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
+  nodeSelector:
+    kubernetes.io/hostname: $CLIENT_NODE
+  restartPolicy: Never
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_TCP_P2S_POD_NAME"
+
+info "Waiting for TCP P2S benchmark to be completed"
+$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
+sleep $BENCHMARK_DURATION
+
+waitpod $CLIENT_TCP_P2S_POD_NAME Succeeded $POD_WAIT_TIMEOUT \
+	|| fatal "Failed to run tcp client server pod until timeout"
+
+TCP_P2S_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_TCP_P2S_POD_NAME | grep receiver| awk '{print $7}')
+info "TCP P2S bandwidth : $TCPP2S_BANDWIDTH"
+
+#==============================================================================
+# UDP benchmark : Pod to Service
+#==============================================================================
+
+CLIENT_UDP_P2S_POD_NAME="knb-client-udp-p2s-$EXECID"
+$DEBUG && debug "Client UDP P2S pod name will be $CLIENT_UDP_P2S_POD_NAME"
+
+info "Starting UDP P2S client benchmark on node $CLIENT_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create UDP P2S client pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $CLIENT_UDP_P2S_POD_NAME
+  name: $CLIENT_UDP_P2S_POD_NAME
+spec:
+  containers:
+  - name: iperf
+    image: infrabuilder/netbench:client
+    args:
+    - /bin/sh
+    - -c
+    - iperf3 -u -b 0 -c $SERVER_SERVICE_NAME -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
+  nodeSelector:
+    kubernetes.io/hostname: $CLIENT_NODE
+  restartPolicy: Never
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_UDP_P2S_POD_NAME"
+
+info "Waiting for UDP P2S benchmark to be completed"
+$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
+sleep $BENCHMARK_DURATION
+
+waitpod $CLIENT_UDP_P2S_POD_NAME Succeeded $POD_WAIT_TIMEOUT  \
+	|| fatal "Failed to run udp client server pod until timeout"
+
+UDP_P2S_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_UDP_P2S_POD_NAME | grep receiver| awk '{print $7}')
+info "UDP P2S bandwidth : $UDP_P2S_BANDWIDTH"
+
+#==============================================================================
+# Output
+#==============================================================================
+case OUTPUT_FORMAT in
+	*)
+		echo "========================================================="
+		echo " Results"
+		echo "========================================================="
+		echo "  Pod to pod :"
+		echo "    TCP :"
+		echo "      bandwidth = $TCP_P2P_BANDWIDTH Mbit/s"
+		echo "    UDP :"
+		echo "      bandwidth = $UDP_P2P_BANDWIDTH Mbit/s"
+		echo "  Pod to Service :"
+		echo "    TCP :"
+		echo "      bandwidth = $TCP_P2S_BANDWIDTH Mbit/s"
+		echo "    UDP :"
+		echo "      bandwidth = $UDP_P2S_BANDWIDTH Mbit/s"
+		echo "========================================================="
+		;;
+esac
+
+#==============================================================================
+# Cleaning
+#==============================================================================
+
+info "Cleaning kubernetes resources ..."
+cleanandexit
