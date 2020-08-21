@@ -18,11 +18,22 @@ function debug { [ $DEBUG_LEVEL -ge 3 ] && echo "$(logdate) [DEBUG] $@" >&2; }
 
 function now { date +%s; }
 function cleanandexit {
+	# Cleaning Kubernetes resources
 	for i in $RESSOURCE_TO_CLEAN_BEFORE_EXIT
 	do
 		$DEBUG && debug "Deleting resource $i"
-		kubectl delete $NAMESPACEOPT $i >/dev/null
+		kubectl delete $NAMESPACEOPT $i --wait=false >/dev/null
 	done
+	
+	# Cleaning temp directory
+	if [ "$CLEANDIR" = "true" ] 
+	then
+		[ -d $DATADIR ] && touch $DATADIR/something && rm $DATADIR/* && rmdir $DATADIR
+	else
+		info "Keeping data directory, you will have to clean it manually."
+		info "$DATADIR"
+	fi
+
 	exit $1
 }
 
@@ -59,9 +70,10 @@ BENCHMARK_DURATION="10"
 SOCKET_BUFFER_SIZE="256K"
 RESSOURCE_TO_CLEAN_BEFORE_EXIT=""
 OUTPUT_FORMAT="text"
+CLEANDIR="true"
 
 #==============================================================================
-# Default config
+# Core functions
 #==============================================================================
 
 function usage {
@@ -82,6 +94,8 @@ function usage {
 	    --duration <time-in-scd>    : Set the benchmark duration for each test in seconds. (Default ${BENCHMARK_DURATION})
 	    -h
 	    --help                      : Display this help message
+	    -k
+	    --keep                      : Keep data directory instead of cleaning it (contains raw benchmark data)
 	    -n <namespace>
 	    --namespace <namespace>     : Set the target kubernetes namespace
 	    -o <format>
@@ -98,6 +112,87 @@ function usage {
 	Example : $0 -v -cn node1 -sn node2
 
 EOF
+}
+
+function start-client {
+	POD_NAME=$1
+	TARGET=$2
+	CMD=""
+	case $3 in
+		idle) CMD="sleep $BENCHMARK_DURATION; echo 0 0 0 0 0 0 0 receiver" ;;
+		udp) CMD="iperf3 -u -b 0 -c $TARGET -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION" ;;
+		tcp) CMD="iperf3 -c $TARGET -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION" ;;
+		*) fatal "Unknown benchmark type '$2'" ;;
+	esac
+
+	info "Starting pod $POD_NAME on node $CLIENT_NODE"
+	cat <<-EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create pod $POD_NAME"
+	apiVersion: v1
+	kind: Pod
+	metadata:
+	  labels:
+	    app: $POD_NAME
+	  name: $POD_NAME
+	spec:
+	  containers:
+	  - name: iperf
+	    image: infrabuilder/netbench:client
+	    args:
+	    - /bin/sh
+	    - -c
+	    - $CMD
+	  nodeSelector:
+	    kubernetes.io/hostname: $CLIENT_NODE
+	  restartPolicy: Never
+	EOF
+
+	RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$POD_NAME"
+
+	# Waiting for Pod to be Running
+	kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
+		|| fatal "Failed to start pod $POD_NAME until timeout"
+	
+	STARTTIME=$(now)
+	ENDTIME=$(( $STARTTIME + $BENCHMARK_DURATION ))
+
+	# Waiting test duration
+	$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
+	sleep $BENCHMARK_DURATION
+
+	info "Waiting for pod $POD_NAME to be completed"
+	# Waiting for test to be succeeded
+	waitpod $POD_NAME Succeeded $POD_WAIT_TIMEOUT \
+		|| fatal "Failed to run pod $POD_NAME until timeout"
+
+	# Extracting data
+	$DEBUG && debug "Writing $POD_NAME logs to $DATADIR/$POD_NAME.log"
+	kubectl logs $NAMESPACEOPT $POD_NAME > $DATADIR/$POD_NAME.log
+	grep receiver $DATADIR/$POD_NAME.log | awk '{print $7}' > $DATADIR/$POD_NAME.bw
+	$DEBUG && debug "$POD_NAME Bandwidth = $(cat $DATADIR/$POD_NAME.bw)"
+
+	# Extracting monitoring
+	$DEBUG && debug "Writing $POD_NAME server metrics to $DATADIR/$POD_NAME-server.metrics"
+	kubectl exec -it $NAMESPACEOPT $MONITOR_SERVER_POD_NAME \
+		-- sh /stats.sh $STARTTIME $ENDTIME > $DATADIR/$POD_NAME-server.metrics
+
+	$DEBUG && debug "Computing $POD_NAME server metrics average to $DATADIR/$POD_NAME-server.avg"
+	
+	tail -n +2 $DATADIR/$POD_NAME-server.metrics | LC_ALL=C awk '{M+=$6;U+=$1;N+=$2;S+=$3;I+=$4;T+=$5;} 
+		END {
+			print "cpu-user cpu-nice cpu-system cpu-iowait cpu-steal memory-used records-number"; 
+			printf "%.2f %.2f %.2f %.2f %.2f %d %d\n",U/NR,N/NR,S/NR,I/NR,T/NR,M/NR,NR
+		}' > $DATADIR/$POD_NAME-server.avg
+
+	$DEBUG && debug "Writing $POD_NAME client metrics to $DATADIR/$POD_NAME-client.metrics"
+	kubectl exec -it $NAMESPACEOPT $MONITOR_CLIENT_POD_NAME \
+		-- sh /stats.sh $STARTTIME $ENDTIME > $DATADIR/$POD_NAME-client.metrics
+
+	$DEBUG && debug "Computing $POD_NAME client metrics average to $DATADIR/$POD_NAME-client.avg"
+	tail -n +2 $DATADIR/$POD_NAME-client.metrics | LC_ALL=C awk '{M+=$6;U+=$1;N+=$2;S+=$3;I+=$4;T+=$5;} 
+		END {
+			print "cpu-user cpu-nice cpu-system cpu-iowait cpu-steal memory-used records-number"; 
+			printf "%.2f %.2f %.2f %.2f %.2f %d %d\n",U/NR,N/NR,S/NR,I/NR,T/NR,M/NR,NR
+		}' > $DATADIR/$POD_NAME-client.avg
 }
 
 #==============================================================================
@@ -155,6 +250,10 @@ do
 			info "Setting output format to ${1}s"
 			OUTPUT_FORMAT="$1"
 			;;
+		--keep|-k)
+			CLEANDIR="false"
+			info "Keeping datadir after benchmark run"
+			;;
 		--verbose|-v)
 			DEBUG_LEVEL=2
 			;;
@@ -163,7 +262,9 @@ do
 			exit
 			;;
 		--debug)
-			DEBUG_LEVEL=3
+			DEBUG_LEVEL=3;
+			DEBUG=true;
+			debug "Mode debug ON"
 			;;
 		--debug-level)
 			shift
@@ -171,7 +272,7 @@ do
 				standard|0) DEBUG_LEVEL=0; DEBUG=false;;
 				warn|1) DEBUG_LEVEL=1; DEBUG=false;;
 				info|2) DEBUG_LEVEL=2; DEBUG=false;;
-				debug|3) DEBUG_LEVEL=3; DEBUG=true;;
+				debug|3) DEBUG_LEVEL=3; DEBUG=true; debug "Mode debug ON";;
 				*) fatal "Unknown debug level '$1'. Here is a list of acceptable debug levels : standard, warn, info, debug";;
 			esac
 			;;
@@ -192,6 +293,77 @@ $DEBUG && debug "Argument parsing done"
 
 [ "$SERVER_NODE" = "" -o "$CLIENT_NODE" = "" ] \
 	&& fatal "Both client node and server node must be set (--server-node and --client-node)"
+
+
+#==============================================================================
+# Preparation
+#==============================================================================
+
+DATADIR="$(mktemp -d)"
+
+# Catching CTRL-C
+trap ctrl_c INT
+function ctrl_c {
+        err "Trapped CTRL-C, trying to exit gracefully ..."
+		cleanandexit 1
+}
+
+
+#==============================================================================
+# Starting monitors
+#==============================================================================
+
+#--- Server monitor --------------------------------
+MONITOR_SERVER_POD_NAME="knb-monitor-server-$EXECID"
+$DEBUG && debug "Server monitor pod name will be $MONITOR_SERVER_POD_NAME"
+
+info "Deploying server monitor on node $SERVER_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create server monitor pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $MONITOR_SERVER_POD_NAME
+  name: $MONITOR_SERVER_POD_NAME
+spec:
+  containers:
+  - name: monitor
+    image: infrabuilder/bench-custom-monitor
+  nodeSelector:
+    kubernetes.io/hostname: $SERVER_NODE
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_SERVER_POD_NAME"
+
+info "Waiting for server monitor to be running"
+waitpod $MONITOR_SERVER_POD_NAME Running $POD_WAIT_TIMEOUT \
+	|| fatal "Failed to start server monitor pod"
+
+#--- Client monitor --------------------------------
+MONITOR_CLIENT_POD_NAME="knb-monitor-client-$EXECID"
+$DEBUG && debug "Client monitor pod name will be $MONITOR_CLIENT_POD_NAME"
+
+info "Deploying client monitor on node $CLIENT_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create client monitor pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $MONITOR_CLIENT_POD_NAME
+  name: $MONITOR_CLIENT_POD_NAME
+spec:
+  containers:
+  - name: monitor
+    image: infrabuilder/bench-custom-monitor
+  nodeSelector:
+    kubernetes.io/hostname: $CLIENT_NODE
+EOF
+
+RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_CLIENT_POD_NAME"
+
+info "Waiting for client monitor to be running"
+waitpod $MONITOR_CLIENT_POD_NAME Running $POD_WAIT_TIMEOUT \
+	|| fatal "Failed to start client monitor pod"
 
 #==============================================================================
 # Starting server
@@ -240,177 +412,86 @@ EOF
 RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME"
 
 info Waiting for server to be running
-waitpod $SERVER_POD_NAME Running $POD_WAIT_TIMEOUT \
+kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$SERVER_POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
 	|| fatal "Failed to start server pod"
 
 SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_POD_NAME -o jsonpath={.status.podIP})
-$DEBUG && debug Server IP address is $SERVER_IP
+$DEBUG && debug "Server IP address is $SERVER_IP"
 
 #==============================================================================
-# TCP benchmark : Pod to Pod
+# Idle 
 #==============================================================================
 
+IDLE_POD_NAME="knb-client-idle-$EXECID"
+$DEBUG && debug "Client Idle pod name will be $IDLE_POD_NAME"
+start-client $IDLE_POD_NAME $SERVER_IP idle
+
+#==============================================================================
+# Pod to Pod
+#==============================================================================
+
+#--- TCP -------------------------------------------
 CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
 $DEBUG && debug "Client TCP P2P pod name will be $CLIENT_TCP_P2P_POD_NAME"
+start-client $CLIENT_TCP_P2P_POD_NAME $SERVER_IP tcp
 
-info "Starting TCP P2P client benchmark on node $CLIENT_NODE"
-cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create TCP P2P client pod"
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    app: $CLIENT_TCP_P2P_POD_NAME
-  name: $CLIENT_TCP_P2P_POD_NAME
-spec:
-  containers:
-  - name: iperf
-    image: infrabuilder/netbench:client
-    args:
-    - /bin/sh
-    - -c
-    - iperf3 -c $SERVER_IP -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
-  nodeSelector:
-    kubernetes.io/hostname: $CLIENT_NODE
-  restartPolicy: Never
-EOF
-
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_TCP_P2P_POD_NAME"
-
-info "Waiting for TCP P2P benchmark to be completed"
-$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
-sleep $BENCHMARK_DURATION
-
-waitpod $CLIENT_TCP_P2P_POD_NAME Succeeded $POD_WAIT_TIMEOUT \
-	|| fatal "Failed to run tcp client server pod until timeout"
-
-TCP_P2P_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_TCP_P2P_POD_NAME | grep receiver| awk '{print $7}')
-info "TCP P2P bandwidth : $TCP_P2P_BANDWIDTH Mbit/s"
-
-#==============================================================================
-# UDP benchmark : Pod to Pod
-#==============================================================================
-
+#--- UDP -------------------------------------------
 CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
 $DEBUG && debug "Client UDP P2P pod name will be $CLIENT_UDP_P2P_POD_NAME"
-
-info "Starting UDPP2P client benchmark on node $CLIENT_NODE"
-cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create UDP P2P client pod"
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    app: $CLIENT_UDP_P2P_POD_NAME
-  name: $CLIENT_UDP_P2P_POD_NAME
-spec:
-  containers:
-  - name: iperf
-    image: infrabuilder/netbench:client
-    args:
-    - /bin/sh
-    - -c
-    - iperf3 -u -b 0 -c $SERVER_IP -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
-  nodeSelector:
-    kubernetes.io/hostname: $CLIENT_NODE
-  restartPolicy: Never
-EOF
-
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_UDP_P2P_POD_NAME"
-
-info "Waiting for UDP P2P benchmark to be completed"
-$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
-sleep $BENCHMARK_DURATION
-
-waitpod $CLIENT_UDP_P2P_POD_NAME Succeeded $POD_WAIT_TIMEOUT  \
-	|| fatal "Failed to run udp client server pod until timeout"
-
-UDP_P2P_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_UDP_P2P_POD_NAME | grep receiver| awk '{print $7}')
-info "UDP P2P bandwidth : $UDP_P2P_BANDWIDTH Mbit/s"
+start-client $CLIENT_UDP_P2P_POD_NAME $SERVER_IP udp
 
 #==============================================================================
-# TCP benchmark : Pod to Service
+# Pod to Service
 #==============================================================================
 
+#--- TCP -------------------------------------------
 CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
 $DEBUG && debug "Client TCP P2S pod name will be $CLIENT_TCP_P2S_POD_NAME"
+start-client $CLIENT_TCP_P2S_POD_NAME $SERVER_SERVICE_NAME tcp
 
-info "Starting TCP client benchmark on node $CLIENT_NODE"
-cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create TCP client pod"
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    app: $CLIENT_TCP_P2S_POD_NAME
-  name: $CLIENT_TCP_P2S_POD_NAME
-spec:
-  containers:
-  - name: iperf
-    image: infrabuilder/netbench:client
-    args:
-    - /bin/sh
-    - -c
-    - iperf3 -c $SERVER_SERVICE_NAME -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
-  nodeSelector:
-    kubernetes.io/hostname: $CLIENT_NODE
-  restartPolicy: Never
-EOF
-
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_TCP_P2S_POD_NAME"
-
-info "Waiting for TCP P2S benchmark to be completed"
-$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
-sleep $BENCHMARK_DURATION
-
-waitpod $CLIENT_TCP_P2S_POD_NAME Succeeded $POD_WAIT_TIMEOUT \
-	|| fatal "Failed to run tcp client server pod until timeout"
-
-TCP_P2S_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_TCP_P2S_POD_NAME | grep receiver| awk '{print $7}')
-info "TCP P2S bandwidth : $TCPP2S_BANDWIDTH Mbit/s"
-
-#==============================================================================
-# UDP benchmark : Pod to Service
-#==============================================================================
+#--- UDP -------------------------------------------
 
 CLIENT_UDP_P2S_POD_NAME="knb-client-udp-p2s-$EXECID"
 $DEBUG && debug "Client UDP P2S pod name will be $CLIENT_UDP_P2S_POD_NAME"
-
-info "Starting UDP P2S client benchmark on node $CLIENT_NODE"
-cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create UDP P2S client pod"
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    app: $CLIENT_UDP_P2S_POD_NAME
-  name: $CLIENT_UDP_P2S_POD_NAME
-spec:
-  containers:
-  - name: iperf
-    image: infrabuilder/netbench:client
-    args:
-    - /bin/sh
-    - -c
-    - iperf3 -u -b 0 -c $SERVER_SERVICE_NAME -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION
-  nodeSelector:
-    kubernetes.io/hostname: $CLIENT_NODE
-  restartPolicy: Never
-EOF
-
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$CLIENT_UDP_P2S_POD_NAME"
-
-info "Waiting for UDP P2S benchmark to be completed"
-$DEBUG && debug "sleeping during the benchmark duration ($BENCHMARK_DURATION) to avoid useless api calls"
-sleep $BENCHMARK_DURATION
-
-waitpod $CLIENT_UDP_P2S_POD_NAME Succeeded $POD_WAIT_TIMEOUT  \
-	|| fatal "Failed to run udp client server pod until timeout"
-
-UDP_P2S_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_UDP_P2S_POD_NAME | grep receiver| awk '{print $7}')
-info "UDP P2S bandwidth : $UDP_P2S_BANDWIDTH Mbit/s"
+start-client $CLIENT_UDP_P2S_POD_NAME $SERVER_SERVICE_NAME udp
 
 #==============================================================================
 # Output
 #==============================================================================
 case $OUTPUT_FORMAT in
 	json)
+
+		function compute-json-result {
+			POD_NAME=$1
+			echo "        \"bandwidth\": $(cat $DATADIR/$POD_NAME.bw),"
+			
+			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-client.avg)
+			$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
+			echo "        \"client\": {"
+			echo "          \"cpu\": {"
+			echo "            \"user\": $(awk '{print $1}' <<< $AVGMETRICS),"
+			echo "            \"nice\": $(awk '{print $2}' <<< $AVGMETRICS),"
+			echo "            \"system\": $(awk '{print $3}' <<< $AVGMETRICS),"
+			echo "            \"iowait\": $(awk '{print $4}' <<< $AVGMETRICS),"
+			echo "            \"steal\": $(awk '{print $5}' <<< $AVGMETRICS)"
+			echo "          },"
+			echo "          \"ram\": $(awk '{print $6}' <<< $AVGMETRICS)"
+			echo "        },"
+
+			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-server.avg)
+			$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
+			echo "        \"server\": {"
+			echo "          \"cpu\": {"
+			echo "            \"user\": $(awk '{print $1}' <<< $AVGMETRICS),"
+			echo "            \"nice\": $(awk '{print $2}' <<< $AVGMETRICS),"
+			echo "            \"system\": $(awk '{print $3}' <<< $AVGMETRICS),"
+			echo "            \"iowait\": $(awk '{print $4}' <<< $AVGMETRICS),"
+			echo "            \"steal\": $(awk '{print $5}' <<< $AVGMETRICS)"
+			echo "          },"
+			echo "          \"ram\": $(awk '{print $6}' <<< $AVGMETRICS)"
+			echo "        }"
+		}
+
 		echo "{"
 		echo "  \"metadata\": {"
 		echo "    \"generator\": \"https://github.com/InfraBuilder/k8s-bench-suite\","
@@ -420,26 +501,55 @@ case $OUTPUT_FORMAT in
 		echo "    \"client-node\": \"$CLIENT_NODE\""
 		echo "  },"
 		echo "  \"data\": {"
+		echo "    \"idle\": {"
+			compute-json-result $IDLE_POD_NAME
+		echo "    },"
 		echo "    \"pod2pod\": {"
 		echo "      \"tcp\": {"
-		echo "        \"bandwidth\": $TCP_P2P_BANDWIDTH"
+			compute-json-result $CLIENT_TCP_P2P_POD_NAME
 		echo "      },"
 		echo "      \"udp\": {"
-		echo "        \"bandwidth\": $UDP_P2P_BANDWIDTH"
+			compute-json-result $CLIENT_UDP_P2P_POD_NAME
 		echo "      }"
 		echo "    },"
 		echo "    \"pod2svc\": {"
 		echo "      \"tcp\": {"
-		echo "        \"bandwidth\": $TCP_P2S_BANDWIDTH"
+			compute-json-result $CLIENT_TCP_P2S_POD_NAME
 		echo "      },"
 		echo "      \"udp\": {"
-		echo "        \"bandwidth\": $UDP_P2S_BANDWIDTH"
+			compute-json-result $CLIENT_UDP_P2S_POD_NAME
 		echo "      }"
 		echo "    }"
 		echo "  }"
 		echo "}"
 		;;
 	yaml)
+		function compute-yaml-result {
+			POD_NAME=$1
+			echo "      bandwidth: $(cat $DATADIR/$POD_NAME.bw)"
+			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-client.avg)
+			$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
+			echo "      client:"
+			echo "        cpu:"
+			echo "          user: $(awk '{print $1}' <<< $AVGMETRICS)"
+			echo "          nice: $(awk '{print $2}' <<< $AVGMETRICS)"
+			echo "          system: $(awk '{print $3}' <<< $AVGMETRICS)"
+			echo "          iowait: $(awk '{print $4}' <<< $AVGMETRICS)"
+			echo "          steal: $(awk '{print $5}' <<< $AVGMETRICS)"
+			echo "        ram: $(awk '{print $6}' <<< $AVGMETRICS)"
+
+			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-server.avg)
+			$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
+			echo "      server:"
+			echo "        cpu:"
+			echo "          user: $(awk '{print $1}' <<< $AVGMETRICS)"
+			echo "          nice: $(awk '{print $2}' <<< $AVGMETRICS)"
+			echo "          system: $(awk '{print $3}' <<< $AVGMETRICS)"
+			echo "          iowait: $(awk '{print $4}' <<< $AVGMETRICS)"
+			echo "          steal: $(awk '{print $5}' <<< $AVGMETRICS)"
+			echo "        ram: $(awk '{print $6}' <<< $AVGMETRICS)"
+		}
+
 		echo "metadata:"
 		echo "  generator: \"https://github.com/InfraBuilder/k8s-bench-suite\""
 		echo "  version: \"$VERSION\""
@@ -447,31 +557,45 @@ case $OUTPUT_FORMAT in
 		echo "  server-node: \"$SERVER_NODE\""
 		echo "  client-node: \"$CLIENT_NODE\""
 		echo "data:"
+		echo "  idle:"
+			compute-yaml-result $IDLE_POD_NAME
 		echo "  pod2pod:"
 		echo "    tcp:"
-		echo "      bandwidth: $TCP_P2P_BANDWIDTH"
+			compute-yaml-result $CLIENT_TCP_P2P_POD_NAME
 		echo "    udp:"
-		echo "      bandwidth: $UDP_P2P_BANDWIDTH"
+			compute-yaml-result $CLIENT_UDP_P2P_POD_NAME
 		echo "  pod2svc:"
 		echo "    tcp:"
-		echo "      bandwidth: $TCP_P2S_BANDWIDTH"
+			compute-yaml-result $CLIENT_TCP_P2S_POD_NAME
 		echo "    udp:"
-		echo "      bandwidth: $UDP_P2S_BANDWIDTH"
+			compute-yaml-result $CLIENT_UDP_P2P_POD_NAME
 		;;
 	*)
+
+		function compute-text-result {
+			POD_NAME=$1
+			echo "      bandwidth = $(cat $DATADIR/$POD_NAME.bw) Mbit/s"
+			# cpu-user cpu-nice cpu-system cpu-iowait cpu-steal memory-used records-number
+			echo "      client cpu = $(awk 'NR==2 {print "user "$1"%, nice "$2"%, system "$3"%, iowait "$4"%, steal "$5"%"}' $DATADIR/$POD_NAME-client.avg)"
+			echo "      server cpu = $(awk 'NR==2 {print "user "$1"%, nice "$2"%, system "$3"%, iowait "$4"%, steal "$5"%"}' $DATADIR/$POD_NAME-server.avg)"
+			echo "      client ram = $(awk 'NR==2 {print $6}' $DATADIR/$POD_NAME-client.avg) MB"
+			echo "      server ram = $(awk 'NR==2 {print $6}' $DATADIR/$POD_NAME-server.avg) MB"
+		}
 		echo "========================================================="
 		echo " Results"
 		echo "========================================================="
+		echo "  Idle :"
+			compute-text-result $IDLE_POD_NAME
 		echo "  Pod to pod :"
 		echo "    TCP :"
-		echo "      bandwidth = $TCP_P2P_BANDWIDTH Mbit/s"
+			compute-text-result $CLIENT_TCP_P2P_POD_NAME
 		echo "    UDP :"
-		echo "      bandwidth = $UDP_P2P_BANDWIDTH Mbit/s"
+			compute-text-result $CLIENT_UDP_P2P_POD_NAME
 		echo "  Pod to Service :"
 		echo "    TCP :"
-		echo "      bandwidth = $TCP_P2S_BANDWIDTH Mbit/s"
+			compute-text-result $CLIENT_TCP_P2S_POD_NAME
 		echo "    UDP :"
-		echo "      bandwidth = $UDP_P2S_BANDWIDTH Mbit/s"
+			compute-text-result $CLIENT_UDP_P2S_POD_NAME
 		echo "========================================================="
 		;;
 esac
