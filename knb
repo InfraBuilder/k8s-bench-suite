@@ -413,7 +413,7 @@ case $OUTPUT_FORMAT in
 	json)
 		echo "{"
 		echo "  \"metadata\": {"
-		echo "    \"generator\": \"\","
+		echo "    \"generator\": \"https://github.com/InfraBuilder/k8s-bench-suite\","
 		echo "    \"version\": \"$VERSION\","
 		echo "    \"date\": \"$(date "+%Y-%m-%d %H:%M:%S")\","
 		echo "    \"server-node\": \"$SERVER_NODE\","
