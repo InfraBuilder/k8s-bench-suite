@@ -47,6 +47,7 @@ function waitpod {
 # Default config
 #==============================================================================
 
+VERSION=1.0.0
 DEBUG=false
 DEBUG_LEVEL=0
 SERVER_NODE=""
@@ -57,6 +58,7 @@ POD_WAIT_TIMEOUT="30"
 BENCHMARK_DURATION="10"
 SOCKET_BUFFER_SIZE="256K"
 RESSOURCE_TO_CLEAN_BEFORE_EXIT=""
+OUTPUT_FORMAT="text"
 
 #==============================================================================
 # Default config
@@ -69,27 +71,31 @@ function usage {
 	
 	Mandatory flags :
 	    -cn <nodename>
-	    --client-node <nodename> : Define kubernetes node name that will host the client part
+	    --client-node <nodename>    : Define kubernetes node name that will host the client part
 	    -sn <nodename>
-	    --server-node <nodename> : Define kubernetes node name that will host the server part
+	    --server-node <nodename>    : Define kubernetes node name that will host the server part
 	
 	Optionnal flags :
-	    --debug : Set the debug level to "debug"
-	    --debug-level <level> : Set the debug level (values : standard, warn, info, debug) 
+	    --debug                     : Set the debug level to "debug"
+	    --debug-level <level>       : Set the debug level (values: standard, warn, info, debug) 
 	    -d <time-in-scd>
-	    --duration <time-in-scd> : Set the benchmark duration for each test in seconds. (Default ${BENCHMARK_DURATION})
+	    --duration <time-in-scd>    : Set the benchmark duration for each test in seconds. (Default ${BENCHMARK_DURATION})
 	    -h
-	    --help : Display this help message
+	    --help                      : Display this help message
 	    -n <namespace>
-	    --namespace <namespace> : Set the target kubernetes namespace
+	    --namespace <namespace>     : Set the target kubernetes namespace
+	    -o <format>
+	    --output <format>           : Set the output format (values: text, yaml, json)
 	    -sbs <size>
 	    --socket-buffer-size <size> : Set the socket buffer size (Default: $SOCKET_BUFFER_SIZE)
 	    -t <time-in-scd>
-	    --timeout <time-in-scd> : Set the pod ready wait timeout in seconds. (Default ${POD_WAIT_TIMEOUT})
+	    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds. (Default ${POD_WAIT_TIMEOUT})
 	    -v
-	    --verbose : Activate the verbose mode by setting debug-level to 'info'
+	    --verbose                   : Activate the verbose mode by setting debug-level to 'info'
+	    -V
+	    --version                   : Show current script version
 
-	Example : $0 -cn node1 -sn node2
+	Example : $0 -v -cn node1 -sn node2
 
 EOF
 }
@@ -135,8 +141,26 @@ do
 			BENCHMARK_DURATION="$1"
 			info "Setting benchmark duration to ${1}s"
 			;;
+		--output|-o)
+			shift
+			
+			# Checking values
+			case $1 in
+				json) ;;
+				yaml) ;;
+				text) ;;
+				*) fatal "Unknown output format '$1'. Here is a list of acceptable formats : text, json, yaml";;
+			esac
+			
+			info "Setting output format to ${1}s"
+			OUTPUT_FORMAT="$1"
+			;;
 		--verbose|-v)
 			DEBUG_LEVEL=2
+			;;
+		--version|-V)
+			echo "$VERSION" 
+			exit
 			;;
 		--debug)
 			DEBUG_LEVEL=3
@@ -260,7 +284,7 @@ waitpod $CLIENT_TCP_P2P_POD_NAME Succeeded $POD_WAIT_TIMEOUT \
 	|| fatal "Failed to run tcp client server pod until timeout"
 
 TCP_P2P_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_TCP_P2P_POD_NAME | grep receiver| awk '{print $7}')
-info "TCP P2P bandwidth : $TCP_P2P_BANDWIDTH"
+info "TCP P2P bandwidth : $TCP_P2P_BANDWIDTH Mbit/s"
 
 #==============================================================================
 # UDP benchmark : Pod to Pod
@@ -300,7 +324,7 @@ waitpod $CLIENT_UDP_P2P_POD_NAME Succeeded $POD_WAIT_TIMEOUT  \
 	|| fatal "Failed to run udp client server pod until timeout"
 
 UDP_P2P_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_UDP_P2P_POD_NAME | grep receiver| awk '{print $7}')
-info "UDP P2P bandwidth : $UDP_P2P_BANDWIDTH"
+info "UDP P2P bandwidth : $UDP_P2P_BANDWIDTH Mbit/s"
 
 #==============================================================================
 # TCP benchmark : Pod to Service
@@ -340,7 +364,7 @@ waitpod $CLIENT_TCP_P2S_POD_NAME Succeeded $POD_WAIT_TIMEOUT \
 	|| fatal "Failed to run tcp client server pod until timeout"
 
 TCP_P2S_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_TCP_P2S_POD_NAME | grep receiver| awk '{print $7}')
-info "TCP P2S bandwidth : $TCPP2S_BANDWIDTH"
+info "TCP P2S bandwidth : $TCPP2S_BANDWIDTH Mbit/s"
 
 #==============================================================================
 # UDP benchmark : Pod to Service
@@ -380,12 +404,60 @@ waitpod $CLIENT_UDP_P2S_POD_NAME Succeeded $POD_WAIT_TIMEOUT  \
 	|| fatal "Failed to run udp client server pod until timeout"
 
 UDP_P2S_BANDWIDTH=$(kubectl logs $NAMESPACEOPT $CLIENT_UDP_P2S_POD_NAME | grep receiver| awk '{print $7}')
-info "UDP P2S bandwidth : $UDP_P2S_BANDWIDTH"
+info "UDP P2S bandwidth : $UDP_P2S_BANDWIDTH Mbit/s"
 
 #==============================================================================
 # Output
 #==============================================================================
-case OUTPUT_FORMAT in
+case $OUTPUT_FORMAT in
+	json)
+		echo "{"
+		echo "  \"metadata\": {"
+		echo "    \"generator\": \"\","
+		echo "    \"version\": \"$VERSION\","
+		echo "    \"date\": \"$(date "+%Y-%m-%d %H:%M:%S")\","
+		echo "    \"server-node\": \"$SERVER_NODE\","
+		echo "    \"client-node\": \"$CLIENT_NODE\""
+		echo "  },"
+		echo "  \"data\": {"
+		echo "    \"pod2pod\": {"
+		echo "      \"tcp\": {"
+		echo "        \"bandwidth\": $TCP_P2P_BANDWIDTH"
+		echo "      },"
+		echo "      \"udp\": {"
+		echo "        \"bandwidth\": $UDP_P2P_BANDWIDTH"
+		echo "      }"
+		echo "    },"
+		echo "    \"pod2svc\": {"
+		echo "      \"tcp\": {"
+		echo "        \"bandwidth\": $TCP_P2S_BANDWIDTH"
+		echo "      },"
+		echo "      \"udp\": {"
+		echo "        \"bandwidth\": $UDP_P2S_BANDWIDTH"
+		echo "      }"
+		echo "    }"
+		echo "  }"
+		echo "}"
+		;;
+	yaml)
+		echo "metadata:"
+		echo "  generator: \"https://github.com/InfraBuilder/k8s-bench-suite\""
+		echo "  version: \"$VERSION\""
+		echo "  date: \"$(date "+%Y-%m-%d %H:%M:%S")\""
+		echo "  server-node: \"$SERVER_NODE\""
+		echo "  client-node: \"$CLIENT_NODE\""
+		echo "data:"
+		echo "  pod2pod:"
+		echo "    tcp:"
+		echo "      bandwidth: $TCP_P2P_BANDWIDTH"
+		echo "    udp:"
+		echo "      bandwidth: $UDP_P2P_BANDWIDTH"
+		echo "  pod2svc:"
+		echo "    tcp:"
+		echo "      bandwidth: $TCP_P2S_BANDWIDTH"
+		echo "    udp:"
+		echo "      bandwidth: $UDP_P2S_BANDWIDTH"
+		;;
 	*)
 		echo "========================================================="
 		echo " Results"
