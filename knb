@@ -136,7 +136,7 @@ function start-client {
 	spec:
 	  containers:
 	  - name: iperf
-	    image: infrabuilder/netbench:client
+	    image: infrabuilder/bench-iperf3
 	    args:
 	    - /bin/sh
 	    - -c
