@@ -58,7 +58,9 @@ function waitpod {
 # Default config
 #==============================================================================
 
-VERSION=1.0.0
+VERSION=1.1.0
+GENERATOR="https://github.com/InfraBuilder/k8s-bench-suite"
+BENCHMARK_DATE=$(date -u "+%Y-%m-%d %H:%M:%S")
 DEBUG=false
 DEBUG_LEVEL=0
 SERVER_NODE=""
@@ -301,6 +303,12 @@ $DEBUG && debug "Argument parsing done"
 
 DATADIR="$(mktemp -d)"
 
+echo $VERSION > $DATADIR/metadata-version
+echo $SERVER_NODE > $DATADIR/metadata-server-node
+echo $CLIENT_NODE > $DATADIR/metadata-client-node
+echo $GENERATOR > $DATADIR/metadata-generator
+echo $BENCHMARK_DATE > $DATADIR/metadata-date
+
 # Catching CTRL-C
 trap ctrl_c INT
 function ctrl_c {
@@ -411,12 +419,22 @@ EOF
 
 RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME"
 
-info Waiting for server to be running
+info "Waiting for server to be running"
 kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$SERVER_POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
 	|| fatal "Failed to start server pod"
 
 SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_POD_NAME -o jsonpath={.status.podIP})
 $DEBUG && debug "Server IP address is $SERVER_IP"
+
+#==============================================================================
+# MTU detection 
+#==============================================================================
+
+info "Detecting CNI MTU"
+CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
+	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| awk '{print $2}')
+$DEBUG && debug "CNI MTU is $CNI_MTU"
+echo $CNI_MTU > $DATADIR/mtu
 
 #==============================================================================
 # Idle 
@@ -494,13 +512,14 @@ case $OUTPUT_FORMAT in
 
 		echo "{"
 		echo "  \"metadata\": {"
-		echo "    \"generator\": \"https://github.com/InfraBuilder/k8s-bench-suite\","
-		echo "    \"version\": \"$VERSION\","
-		echo "    \"date\": \"$(date "+%Y-%m-%d %H:%M:%S")\","
-		echo "    \"server-node\": \"$SERVER_NODE\","
-		echo "    \"client-node\": \"$CLIENT_NODE\""
+		echo "    \"generator\": \"$(cat $DATADIR/metadata-generator)\","
+		echo "    \"version\": \"$(cat $DATADIR/metadata-version)\","
+		echo "    \"date\": \"$(cat $DATADIR/metadata-date)\","
+		echo "    \"server-node\": \"$(cat $DATADIR/metadata-server-node)\","
+		echo "    \"client-node\": \"$(cat $DATADIR/metadata-client-node)\""
 		echo "  },"
 		echo "  \"data\": {"
+		echo "    \"mtu\": $(cat $DATADIR/mtu),"
 		echo "    \"idle\": {"
 			compute-json-result $IDLE_POD_NAME
 		echo "    },"
@@ -551,12 +570,13 @@ case $OUTPUT_FORMAT in
 		}
 
 		echo "metadata:"
-		echo "  generator: \"https://github.com/InfraBuilder/k8s-bench-suite\""
-		echo "  version: \"$VERSION\""
-		echo "  date: \"$(date "+%Y-%m-%d %H:%M:%S")\""
-		echo "  server-node: \"$SERVER_NODE\""
-		echo "  client-node: \"$CLIENT_NODE\""
+		echo "  generator: \"$(cat $DATADIR/metadata-generator)\""
+		echo "  version: \"$(cat $DATADIR/metadata-version)\""
+		echo "  date: \"$(cat $DATADIR/metadata-date)\""
+		echo "  server-node: \"$(cat $DATADIR/metadata-server-node)\""
+		echo "  client-node: \"$(cat $DATADIR/metadata-client-node)\""
 		echo "data:"
+		echo "  mtu: \"$(cat $DATADIR/mtu)\""
 		echo "  idle:"
 			compute-yaml-result $IDLE_POD_NAME
 		echo "  pod2pod:"
@@ -582,8 +602,14 @@ case $OUTPUT_FORMAT in
 			echo "      server ram = $(awk 'NR==2 {print $6}' $DATADIR/$POD_NAME-server.avg) MB"
 		}
 		echo "========================================================="
-		echo " Results"
+		echo " Benchmark Results - $(cat $DATADIR/metadata-date) UTC"
 		echo "========================================================="
+		echo " Generator : $(cat $DATADIR/metadata-generator)"
+		echo " Version   : $(cat $DATADIR/metadata-version)"
+		echo " Server    : $(cat $DATADIR/metadata-server-node)"
+		echo " Client    : $(cat $DATADIR/metadata-client-node)"
+		echo "========================================================="
+		echo "  Discovered MTU : $(cat $DATADIR/mtu)"
 		echo "  Idle :"
 			compute-text-result $IDLE_POD_NAME
 		echo "  Pod to pod :"
