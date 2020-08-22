@@ -200,6 +200,164 @@ function run-client {
 		}' > $DATADIR/$POD_NAME-client.avg
 }
 
+function compute-json-result {
+	function compute-json-result-for-pod {
+		POD_NAME=$1
+		PADDING=$(printf "%${2}s")
+
+		echo "${PADDING}\"bandwidth\": $(cat $DATADIR/$POD_NAME.bw),"
+		
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
+		$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
+		echo "${PADDING}\"client\": {"
+		echo "${PADDING}  \"cpu\": {"
+		echo "${PADDING}    \"total\": $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"user\": $($BIN_AWK '{print $1}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"nice\": $($BIN_AWK '{print $2}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"system\": $($BIN_AWK '{print $3}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"iowait\": $($BIN_AWK '{print $4}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"steal\": $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
+		echo "${PADDING}  },"
+		echo "${PADDING}  \"ram\": $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
+		echo "${PADDING}},"
+
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
+		$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
+		echo "${PADDING}\"server\": {"
+		echo "${PADDING}  \"cpu\": {"
+		echo "${PADDING}    \"total\": $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"user\": $($BIN_AWK '{print $1}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"nice\": $($BIN_AWK '{print $2}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"system\": $($BIN_AWK '{print $3}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"iowait\": $($BIN_AWK '{print $4}' <<< $AVGMETRICS),"
+		echo "${PADDING}    \"steal\": $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
+		echo "${PADDING}  },"
+		echo "${PADDING}  \"ram\": $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
+		echo "${PADDING}}"
+	}
+
+	echo "{"
+	echo "  \"metadata\": {"
+	echo "    \"generator\": \"$GENERATOR\","
+	echo "    \"version\": \"$VERSION\","
+	echo "    \"date\": \"$BENCHMARK_DATE\","
+	echo "    \"server-node\": \"$SERVER_NODE\","
+	echo "    \"client-node\": \"$CLIENT_NODE\""
+	echo "  },"
+	echo "  \"data\": {"
+	echo "    \"mtu\": $(cat $DATADIR/mtu),"
+	echo "    \"idle\": {"
+		compute-json-result-for-pod $IDLE_POD_NAME 6
+	echo "    },"
+	echo "    \"pod2pod\": {"
+	echo "      \"tcp\": {"
+		compute-json-result-for-pod $CLIENT_TCP_P2P_POD_NAME 8
+	echo "      },"
+	echo "      \"udp\": {"
+		compute-json-result-for-pod $CLIENT_UDP_P2P_POD_NAME 8
+	echo "      }"
+	echo "    },"
+	echo "    \"pod2svc\": {"
+	echo "      \"tcp\": {"
+		compute-json-result-for-pod $CLIENT_TCP_P2S_POD_NAME 8
+	echo "      },"
+	echo "      \"udp\": {"
+		compute-json-result-for-pod $CLIENT_UDP_P2S_POD_NAME 8
+	echo "      }"
+	echo "    }"
+	echo "  }"
+	echo "}"
+}
+
+function compute-yaml-result {
+
+	function compute-yaml-result-for-pod {
+		POD_NAME=$1
+		PADDING=$(printf "%${2}s")
+
+		echo "${PADDING}bandwidth: $(cat $DATADIR/$POD_NAME.bw)"
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
+		$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
+		echo "${PADDING}client:"
+		echo "${PADDING}  cpu:"
+		echo "${PADDING}    total: $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS)"
+		echo "${PADDING}    user: $($BIN_AWK '{print $1}' <<< $AVGMETRICS)"
+		echo "${PADDING}    nice: $($BIN_AWK '{print $2}' <<< $AVGMETRICS)"
+		echo "${PADDING}    system: $($BIN_AWK '{print $3}' <<< $AVGMETRICS)"
+		echo "${PADDING}    iowait: $($BIN_AWK '{print $4}' <<< $AVGMETRICS)"
+		echo "${PADDING}    steal: $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
+		echo "${PADDING}  ram: $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
+
+		AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
+		$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
+		echo "${PADDING}server:"
+		echo "${PADDING}  cpu:"
+		echo "${PADDING}    total: $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS)"
+		echo "${PADDING}    user: $($BIN_AWK '{print $1}' <<< $AVGMETRICS)"
+		echo "${PADDING}    nice: $($BIN_AWK '{print $2}' <<< $AVGMETRICS)"
+		echo "${PADDING}    system: $($BIN_AWK '{print $3}' <<< $AVGMETRICS)"
+		echo "${PADDING}    iowait: $($BIN_AWK '{print $4}' <<< $AVGMETRICS)"
+		echo "${PADDING}    steal: $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
+		echo "${PADDING}  ram: $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
+	}
+
+	echo "metadata:"
+	echo "  generator: \"$GENERATOR\""
+	echo "  version: \"$VERSION\""
+	echo "  date: \"$BENCHMARK_DATE\""
+	echo "  server-node: \"$SERVER_NODE\""
+	echo "  client-node: \"$CLIENT_NODE\""
+	echo "data:"
+	echo "  mtu: \"$(cat $DATADIR/mtu)\""
+	echo "  idle:"
+		compute-yaml-result-for-pod $IDLE_POD_NAME 4
+	echo "  pod2pod:"
+	echo "    tcp:"
+		compute-yaml-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
+	echo "    udp:"
+		compute-yaml-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
+	echo "  pod2svc:"
+	echo "    tcp:"
+		compute-yaml-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
+	echo "    udp:"
+		compute-yaml-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
+}
+
+function compute-text-result {
+	function compute-text-result-for-pod {
+		POD_NAME=$1
+		PADDING=$(printf "%${2}s")
+		echo "${PADDING}bandwidth = $(cat $DATADIR/$POD_NAME.bw) Mbit/s"
+		echo "${PADDING}client cpu = $($BIN_AWK 'NR==2 {printf "total %.2f%% (user %.2f%%, nice %.2f%%, system %.2f%%, iowait %.2f%%, steal %.2f%%)",$1+$2+$3+$4+$5,$1,$2,$3,$4,$5}' $DATADIR/$POD_NAME-client.avg)"
+		echo "${PADDING}server cpu = $($BIN_AWK 'NR==2 {printf "total %.2f%% (user %.2f%%, nice %.2f%%, system %.2f%%, iowait %.2f%%, steal %.2f%%)",$1+$2+$3+$4+$5,$1,$2,$3,$4,$5}' $DATADIR/$POD_NAME-server.avg)"
+		echo "${PADDING}client ram = $($BIN_AWK 'NR==2 {print $6}' $DATADIR/$POD_NAME-client.avg) MB"
+		echo "${PADDING}server ram = $($BIN_AWK 'NR==2 {print $6}' $DATADIR/$POD_NAME-server.avg) MB"
+	}
+
+	echo "========================================================="
+	echo " Benchmark Results - $BENCHMARK_DATE UTC"
+	echo "========================================================="
+	echo " Generator : $GENERATOR"
+	echo " Version   : $VERSION"
+	echo " Server    : $SERVER_NODE"
+	echo " Client    : $CLIENT_NODE"
+	echo "========================================================="
+	echo "  Discovered MTU : $(cat $DATADIR/mtu)"
+	echo "  Idle :"
+		compute-text-result-for-pod $IDLE_POD_NAME 4
+	echo "  Pod to pod :"
+	echo "    TCP :"
+		compute-text-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
+	echo "    UDP :"
+		compute-text-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
+	echo "  Pod to Service :"
+	echo "    TCP :"
+		compute-text-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
+	echo "    UDP :"
+		compute-text-result-for-pod $CLIENT_UDP_P2S_POD_NAME 6
+	echo "========================================================="
+}
+
 #==============================================================================
 # Argument parsing
 #==============================================================================
@@ -357,7 +515,6 @@ function ctrl_c {
 		cleanandexit 1
 }
 
-
 #==============================================================================
 # Starting monitors
 #==============================================================================
@@ -458,8 +615,10 @@ SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_POD_NAME -o jsonpath={.status.
 $DEBUG && debug "Server IP address is $SERVER_IP"
 
 #==============================================================================
-# MTU detection 
+# Benchmark tests
 #==============================================================================
+
+#--- MTU Detection ----------------------------------------
 
 info "Detecting CNI MTU"
 CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
@@ -467,23 +626,17 @@ CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
 $DEBUG && debug "CNI MTU is $CNI_MTU"
 echo $CNI_MTU > $DATADIR/mtu
 
-#==============================================================================
-# Idle 
-#==============================================================================
+#--- Idle measurment  -------------------------------------
 
 run-client $IDLE_POD_NAME $SERVER_IP idle
 
-#==============================================================================
-# Pod to Pod
-#==============================================================================
+#--- Pod to pod -------------------------------------------
 
 run-client $CLIENT_TCP_P2P_POD_NAME $SERVER_IP tcp
 
 run-client $CLIENT_UDP_P2P_POD_NAME $SERVER_IP udp
 
-#==============================================================================
-# Pod to Service
-#==============================================================================
+#--- Pod to Service ---------------------------------------
 
 run-client $CLIENT_TCP_P2S_POD_NAME $SERVER_SERVICE_NAME tcp
 
@@ -492,162 +645,11 @@ run-client $CLIENT_UDP_P2S_POD_NAME $SERVER_SERVICE_NAME udp
 #==============================================================================
 # Output
 #==============================================================================
+
 case $OUTPUT_FORMAT in
-	json)
-		function compute-json-result-for-pod {
-			POD_NAME=$1
-			PADDING=$(printf "%${2}s")
-
-			echo "${PADDING}\"bandwidth\": $(cat $DATADIR/$POD_NAME.bw),"
-			
-			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
-			$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
-			echo "${PADDING}\"client\": {"
-			echo "${PADDING}  \"cpu\": {"
-			echo "${PADDING}    \"total\": $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"user\": $($BIN_AWK '{print $1}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"nice\": $($BIN_AWK '{print $2}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"system\": $($BIN_AWK '{print $3}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"iowait\": $($BIN_AWK '{print $4}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"steal\": $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
-			echo "${PADDING}  },"
-			echo "${PADDING}  \"ram\": $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
-			echo "${PADDING}},"
-
-			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
-			$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
-			echo "${PADDING}\"server\": {"
-			echo "${PADDING}  \"cpu\": {"
-			echo "${PADDING}    \"total\": $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"user\": $($BIN_AWK '{print $1}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"nice\": $($BIN_AWK '{print $2}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"system\": $($BIN_AWK '{print $3}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"iowait\": $($BIN_AWK '{print $4}' <<< $AVGMETRICS),"
-			echo "${PADDING}    \"steal\": $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
-			echo "${PADDING}  },"
-			echo "${PADDING}  \"ram\": $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
-			echo "${PADDING}}"
-		}
-
-		echo "{"
-		echo "  \"metadata\": {"
-		echo "    \"generator\": \"$GENERATOR\","
-		echo "    \"version\": \"$VERSION\","
-		echo "    \"date\": \"$BENCHMARK_DATE\","
-		echo "    \"server-node\": \"$SERVER_NODE\","
-		echo "    \"client-node\": \"$CLIENT_NODE\""
-		echo "  },"
-		echo "  \"data\": {"
-		echo "    \"mtu\": $(cat $DATADIR/mtu),"
-		echo "    \"idle\": {"
-			compute-json-result-for-pod $IDLE_POD_NAME 6
-		echo "    },"
-		echo "    \"pod2pod\": {"
-		echo "      \"tcp\": {"
-			compute-json-result-for-pod $CLIENT_TCP_P2P_POD_NAME 8
-		echo "      },"
-		echo "      \"udp\": {"
-			compute-json-result-for-pod $CLIENT_UDP_P2P_POD_NAME 8
-		echo "      }"
-		echo "    },"
-		echo "    \"pod2svc\": {"
-		echo "      \"tcp\": {"
-			compute-json-result-for-pod $CLIENT_TCP_P2S_POD_NAME 8
-		echo "      },"
-		echo "      \"udp\": {"
-			compute-json-result-for-pod $CLIENT_UDP_P2S_POD_NAME 8
-		echo "      }"
-		echo "    }"
-		echo "  }"
-		echo "}"
-		;;
-	yaml)
-		function compute-yaml-result-for-pod {
-			POD_NAME=$1
-			PADDING=$(printf "%${2}s")
-
-			echo "${PADDING}bandwidth: $(cat $DATADIR/$POD_NAME.bw)"
-			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
-			$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
-			echo "${PADDING}client:"
-			echo "${PADDING}  cpu:"
-			echo "${PADDING}    total: $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS)"
-			echo "${PADDING}    user: $($BIN_AWK '{print $1}' <<< $AVGMETRICS)"
-			echo "${PADDING}    nice: $($BIN_AWK '{print $2}' <<< $AVGMETRICS)"
-			echo "${PADDING}    system: $($BIN_AWK '{print $3}' <<< $AVGMETRICS)"
-			echo "${PADDING}    iowait: $($BIN_AWK '{print $4}' <<< $AVGMETRICS)"
-			echo "${PADDING}    steal: $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
-			echo "${PADDING}  ram: $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
-
-			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
-			$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
-			echo "${PADDING}server:"
-			echo "${PADDING}  cpu:"
-			echo "${PADDING}    total: $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS)"
-			echo "${PADDING}    user: $($BIN_AWK '{print $1}' <<< $AVGMETRICS)"
-			echo "${PADDING}    nice: $($BIN_AWK '{print $2}' <<< $AVGMETRICS)"
-			echo "${PADDING}    system: $($BIN_AWK '{print $3}' <<< $AVGMETRICS)"
-			echo "${PADDING}    iowait: $($BIN_AWK '{print $4}' <<< $AVGMETRICS)"
-			echo "${PADDING}    steal: $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
-			echo "${PADDING}  ram: $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
-		}
-
-		echo "metadata:"
-		echo "  generator: \"$GENERATOR\""
-		echo "  version: \"$VERSION\""
-		echo "  date: \"$BENCHMARK_DATE\""
-		echo "  server-node: \"$SERVER_NODE\""
-		echo "  client-node: \"$CLIENT_NODE\""
-		echo "data:"
-		echo "  mtu: \"$(cat $DATADIR/mtu)\""
-		echo "  idle:"
-			compute-yaml-result-for-pod $IDLE_POD_NAME 4
-		echo "  pod2pod:"
-		echo "    tcp:"
-			compute-yaml-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
-		echo "    udp:"
-			compute-yaml-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
-		echo "  pod2svc:"
-		echo "    tcp:"
-			compute-yaml-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
-		echo "    udp:"
-			compute-yaml-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
-		;;
-	*)
-
-		function compute-text-result-for-pod {
-			POD_NAME=$1
-			PADDING=$(printf "%${2}s")
-			echo "${PADDING}bandwidth = $(cat $DATADIR/$POD_NAME.bw) Mbit/s"
-			echo "${PADDING}client cpu = $($BIN_AWK 'NR==2 {printf "total %.2f%% (user %.2f%%, nice %.2f%%, system %.2f%%, iowait %.2f%%, steal %.2f%%)",$1+$2+$3+$4+$5,$1,$2,$3,$4,$5}' $DATADIR/$POD_NAME-client.avg)"
-			echo "${PADDING}server cpu = $($BIN_AWK 'NR==2 {printf "total %.2f%% (user %.2f%%, nice %.2f%%, system %.2f%%, iowait %.2f%%, steal %.2f%%)",$1+$2+$3+$4+$5,$1,$2,$3,$4,$5}' $DATADIR/$POD_NAME-server.avg)"
-			echo "${PADDING}client ram = $($BIN_AWK 'NR==2 {print $6}' $DATADIR/$POD_NAME-client.avg) MB"
-			echo "${PADDING}server ram = $($BIN_AWK 'NR==2 {print $6}' $DATADIR/$POD_NAME-server.avg) MB"
-		}
-
-		echo "========================================================="
-		echo " Benchmark Results - $BENCHMARK_DATE UTC"
-		echo "========================================================="
-		echo " Generator : $GENERATOR"
-		echo " Version   : $VERSION"
-		echo " Server    : $SERVER_NODE"
-		echo " Client    : $CLIENT_NODE"
-		echo "========================================================="
-		echo "  Discovered MTU : $(cat $DATADIR/mtu)"
-		echo "  Idle :"
-			compute-text-result-for-pod $IDLE_POD_NAME 4
-		echo "  Pod to pod :"
-		echo "    TCP :"
-			compute-text-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
-		echo "    UDP :"
-			compute-text-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
-		echo "  Pod to Service :"
-		echo "    TCP :"
-			compute-text-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
-		echo "    UDP :"
-			compute-text-result-for-pod $CLIENT_UDP_P2S_POD_NAME 6
-		echo "========================================================="
-		;;
+	json) compute-json-result ;;
+	yaml) compute-yaml-result ;;
+	*)    compute-text-result ;;
 esac
 
 #==============================================================================
