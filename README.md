@@ -114,21 +114,41 @@ Mandatory flags :
 
 ### More examples
 
-To run benchmark from node A to node B, showing only result in yaml format :
+- Simple benchmark from "node1" to "node2" in verbose mode :
 
-```bash
-./knb -cn A -sn B -o yaml
-```
+  ```bash
+  knb -v -cn node1 -sn node2
+  ```
 
-To run benchmark from node Asterix to node Obelix, with the most verbose output and a result as json in a `res.json` file :
+- Benchmark from "nA" to "nB" and save data in file `mybench.knbdata` 
 
-```bash
-./knb --debug -cn Asterix -sn Obelix -o json > res.json
-```
+  ```bash 
+  knb -cn nA -sn nB -o data -f mybench.knbdata
+  ```
 
-Running benchmark in namespace "myns" :
+- Generate report in json from previous benchmark data file `mybench.knbdata`
 
-```bash
-./knb -n myns -cn node1 -sn node2
-```
+  ```bash
+  knb -fd mybench.knbdata -o json
+  ```
+
+- To run benchmark from node A to node B, showing only result in yaml format : 
+
+  ```bash
+  knb -cn A -sn B -o yaml
+  ```
+
+- To run benchmark from node Asterix to node Obelix, with the most verbose output and a result as json in a `res.json` file :
+
+  ```bash
+  knb --debug -cn Asterix -sn Obelix -o json > res.json
+  ```
+
+- Running benchmark in namespace "myns" :
+
+  ```bash
+  knb -n myns -cn node1 -sn node2
+  ```
+
+  
 
