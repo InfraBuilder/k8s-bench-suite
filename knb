@@ -58,8 +58,8 @@ function waitpod {
 # Default config
 #==============================================================================
 
-VERSION=1.1.0
-GENERATOR="https://github.com/InfraBuilder/k8s-bench-suite"
+VERSION=1.1.1
+GENERATOR="github.com/InfraBuilder/k8s-bench-suite"
 BENCHMARK_DATE=$(date -u "+%Y-%m-%d %H:%M:%S")
 DEBUG=false
 DEBUG_LEVEL=0
@@ -73,6 +73,9 @@ SOCKET_BUFFER_SIZE="256K"
 RESSOURCE_TO_CLEAN_BEFORE_EXIT=""
 OUTPUT_FORMAT="text"
 CLEANDIR="true"
+
+export LC_ALL=C # Trick to no depend on locale
+BIN_AWK="awk"
 
 #==============================================================================
 # Core functions
@@ -116,7 +119,7 @@ function usage {
 EOF
 }
 
-function start-client {
+function run-client {
 	POD_NAME=$1
 	TARGET=$2
 	CMD=""
@@ -169,7 +172,7 @@ function start-client {
 	# Extracting data
 	$DEBUG && debug "Writing $POD_NAME logs to $DATADIR/$POD_NAME.log"
 	kubectl logs $NAMESPACEOPT $POD_NAME > $DATADIR/$POD_NAME.log
-	grep receiver $DATADIR/$POD_NAME.log | awk '{print $7}' > $DATADIR/$POD_NAME.bw
+	grep receiver $DATADIR/$POD_NAME.log | $BIN_AWK '{print $7}' > $DATADIR/$POD_NAME.bw
 	$DEBUG && debug "$POD_NAME Bandwidth = $(cat $DATADIR/$POD_NAME.bw)"
 
 	# Extracting monitoring
@@ -179,7 +182,7 @@ function start-client {
 
 	$DEBUG && debug "Computing $POD_NAME server metrics average to $DATADIR/$POD_NAME-server.avg"
 	
-	tail -n +2 $DATADIR/$POD_NAME-server.metrics | LC_ALL=C awk '{M+=$6;U+=$1;N+=$2;S+=$3;I+=$4;T+=$5;} 
+	tail -n +2 $DATADIR/$POD_NAME-server.metrics | LC_ALL=C $BIN_AWK '{M+=$6;U+=$1;N+=$2;S+=$3;I+=$4;T+=$5;} 
 		END {
 			print "cpu-user cpu-nice cpu-system cpu-iowait cpu-steal memory-used records-number"; 
 			printf "%.2f %.2f %.2f %.2f %.2f %d %d\n",U/NR,N/NR,S/NR,I/NR,T/NR,M/NR,NR
@@ -190,7 +193,7 @@ function start-client {
 		-- sh /stats.sh $STARTTIME $ENDTIME > $DATADIR/$POD_NAME-client.metrics
 
 	$DEBUG && debug "Computing $POD_NAME client metrics average to $DATADIR/$POD_NAME-client.avg"
-	tail -n +2 $DATADIR/$POD_NAME-client.metrics | LC_ALL=C awk '{M+=$6;U+=$1;N+=$2;S+=$3;I+=$4;T+=$5;} 
+	tail -n +2 $DATADIR/$POD_NAME-client.metrics | $BIN_AWK '{M+=$6;U+=$1;N+=$2;S+=$3;I+=$4;T+=$5;} 
 		END {
 			print "cpu-user cpu-nice cpu-system cpu-iowait cpu-steal memory-used records-number"; 
 			printf "%.2f %.2f %.2f %.2f %.2f %d %d\n",U/NR,N/NR,S/NR,I/NR,T/NR,M/NR,NR
@@ -296,18 +299,56 @@ $DEBUG && debug "Argument parsing done"
 [ "$SERVER_NODE" = "" -o "$CLIENT_NODE" = "" ] \
 	&& fatal "Both client node and server node must be set (--server-node and --client-node)"
 
-
 #==============================================================================
 # Preparation
 #==============================================================================
 
 DATADIR="$(mktemp -d)"
 
-echo $VERSION > $DATADIR/metadata-version
-echo $SERVER_NODE > $DATADIR/metadata-server-node
-echo $CLIENT_NODE > $DATADIR/metadata-client-node
-echo $GENERATOR > $DATADIR/metadata-generator
-echo $BENCHMARK_DATE > $DATADIR/metadata-date
+# Generating pod names
+MONITOR_SERVER_POD_NAME="knb-monitor-server-$EXECID"
+$DEBUG && debug "Server monitor pod name will be $MONITOR_SERVER_POD_NAME"
+
+MONITOR_CLIENT_POD_NAME="knb-monitor-client-$EXECID"
+$DEBUG && debug "Client monitor pod name will be $MONITOR_CLIENT_POD_NAME"
+
+SERVER_POD_NAME="knb-server-$EXECID"
+SERVER_SERVICE_NAME=$SERVER_POD_NAME
+$DEBUG && debug "Server pod name will be $SERVER_POD_NAME"
+
+IDLE_POD_NAME="knb-client-idle-$EXECID"
+$DEBUG && debug "Client Idle pod name will be $IDLE_POD_NAME"
+
+CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
+$DEBUG && debug "Client TCP P2P pod name will be $CLIENT_TCP_P2P_POD_NAME"
+
+CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
+$DEBUG && debug "Client UDP P2P pod name will be $CLIENT_UDP_P2P_POD_NAME"
+
+CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
+$DEBUG && debug "Client TCP P2S pod name will be $CLIENT_TCP_P2S_POD_NAME"
+
+CLIENT_UDP_P2S_POD_NAME="knb-client-udp-p2s-$EXECID"
+$DEBUG && debug "Client UDP P2S pod name will be $CLIENT_UDP_P2S_POD_NAME"
+
+
+# Creating env file with metadata
+cat <<EOF > $DATADIR/env
+GENERATOR=$GENERATOR
+VERSION=$VERSION
+BENCHMARK_DATE=$BENCHMARK_DATE
+SERVER_NODE=$SERVER_NODE
+CLIENT_NODE=$CLIENT_NODE
+
+MONITOR_SERVER_POD_NAME=$MONITOR_SERVER_POD_NAME
+MONITOR_CLIENT_POD_NAME=$MONITOR_CLIENT_POD_NAME
+SERVER_POD_NAME=$SERVER_POD_NAME
+IDLE_POD_NAME=$IDLE_POD_NAME
+CLIENT_TCP_P2P_POD_NAME=$CLIENT_TCP_P2P_POD_NAME
+CLIENT_UDP_P2P_POD_NAME=$CLIENT_UDP_P2P_POD_NAME
+CLIENT_TCP_P2S_POD_NAME=$CLIENT_TCP_P2S_POD_NAME
+CLIENT_UDP_P2S_POD_NAME=$CLIENT_UDP_P2S_POD_NAME
+EOF
 
 # Catching CTRL-C
 trap ctrl_c INT
@@ -322,9 +363,6 @@ function ctrl_c {
 #==============================================================================
 
 #--- Server monitor --------------------------------
-MONITOR_SERVER_POD_NAME="knb-monitor-server-$EXECID"
-$DEBUG && debug "Server monitor pod name will be $MONITOR_SERVER_POD_NAME"
-
 info "Deploying server monitor on node $SERVER_NODE"
 cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create server monitor pod"
 apiVersion: v1
@@ -348,9 +386,6 @@ waitpod $MONITOR_SERVER_POD_NAME Running $POD_WAIT_TIMEOUT \
 	|| fatal "Failed to start server monitor pod"
 
 #--- Client monitor --------------------------------
-MONITOR_CLIENT_POD_NAME="knb-monitor-client-$EXECID"
-$DEBUG && debug "Client monitor pod name will be $MONITOR_CLIENT_POD_NAME"
-
 info "Deploying client monitor on node $CLIENT_NODE"
 cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create client monitor pod"
 apiVersion: v1
@@ -376,10 +411,6 @@ waitpod $MONITOR_CLIENT_POD_NAME Running $POD_WAIT_TIMEOUT \
 #==============================================================================
 # Starting server
 #==============================================================================
-
-SERVER_POD_NAME="knb-server-$EXECID"
-SERVER_SERVICE_NAME=$SERVER_POD_NAME
-$DEBUG && debug "Server pod name will be $SERVER_POD_NAME"
 
 info "Deploying iperf server on node $SERVER_NODE"
 cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create server pod"
@@ -432,7 +463,7 @@ $DEBUG && debug "Server IP address is $SERVER_IP"
 
 info "Detecting CNI MTU"
 CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
-	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| awk '{print $2}')
+	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| $BIN_AWK '{print $2}')
 $DEBUG && debug "CNI MTU is $CNI_MTU"
 echo $CNI_MTU > $DATADIR/mtu
 
@@ -440,83 +471,69 @@ echo $CNI_MTU > $DATADIR/mtu
 # Idle 
 #==============================================================================
 
-IDLE_POD_NAME="knb-client-idle-$EXECID"
-$DEBUG && debug "Client Idle pod name will be $IDLE_POD_NAME"
-start-client $IDLE_POD_NAME $SERVER_IP idle
+run-client $IDLE_POD_NAME $SERVER_IP idle
 
 #==============================================================================
 # Pod to Pod
 #==============================================================================
 
-#--- TCP -------------------------------------------
-CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
-$DEBUG && debug "Client TCP P2P pod name will be $CLIENT_TCP_P2P_POD_NAME"
-start-client $CLIENT_TCP_P2P_POD_NAME $SERVER_IP tcp
+run-client $CLIENT_TCP_P2P_POD_NAME $SERVER_IP tcp
 
-#--- UDP -------------------------------------------
-CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
-$DEBUG && debug "Client UDP P2P pod name will be $CLIENT_UDP_P2P_POD_NAME"
-start-client $CLIENT_UDP_P2P_POD_NAME $SERVER_IP udp
+run-client $CLIENT_UDP_P2P_POD_NAME $SERVER_IP udp
 
 #==============================================================================
 # Pod to Service
 #==============================================================================
 
-#--- TCP -------------------------------------------
-CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
-$DEBUG && debug "Client TCP P2S pod name will be $CLIENT_TCP_P2S_POD_NAME"
-start-client $CLIENT_TCP_P2S_POD_NAME $SERVER_SERVICE_NAME tcp
+run-client $CLIENT_TCP_P2S_POD_NAME $SERVER_SERVICE_NAME tcp
 
-#--- UDP -------------------------------------------
-
-CLIENT_UDP_P2S_POD_NAME="knb-client-udp-p2s-$EXECID"
-$DEBUG && debug "Client UDP P2S pod name will be $CLIENT_UDP_P2S_POD_NAME"
-start-client $CLIENT_UDP_P2S_POD_NAME $SERVER_SERVICE_NAME udp
+run-client $CLIENT_UDP_P2S_POD_NAME $SERVER_SERVICE_NAME udp
 
 #==============================================================================
 # Output
 #==============================================================================
 case $OUTPUT_FORMAT in
 	json)
-
 		function compute-json-result {
 			POD_NAME=$1
 			echo "        \"bandwidth\": $(cat $DATADIR/$POD_NAME.bw),"
 			
-			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-client.avg)
+			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
 			$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
 			echo "        \"client\": {"
 			echo "          \"cpu\": {"
-			echo "            \"user\": $(awk '{print $1}' <<< $AVGMETRICS),"
-			echo "            \"nice\": $(awk '{print $2}' <<< $AVGMETRICS),"
-			echo "            \"system\": $(awk '{print $3}' <<< $AVGMETRICS),"
-			echo "            \"iowait\": $(awk '{print $4}' <<< $AVGMETRICS),"
-			echo "            \"steal\": $(awk '{print $5}' <<< $AVGMETRICS)"
+			echo "            \"total\": $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS),"
+			echo "            \"user\": $($BIN_AWK '{print $1}' <<< $AVGMETRICS),"
+			echo "            \"nice\": $($BIN_AWK '{print $2}' <<< $AVGMETRICS),"
+			echo "            \"system\": $($BIN_AWK '{print $3}' <<< $AVGMETRICS),"
+			echo "            \"iowait\": $($BIN_AWK '{print $4}' <<< $AVGMETRICS),"
+			echo "            \"steal\": $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
 			echo "          },"
-			echo "          \"ram\": $(awk '{print $6}' <<< $AVGMETRICS)"
+			echo "          \"ram\": $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
 			echo "        },"
 
-			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-server.avg)
+			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
 			$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
 			echo "        \"server\": {"
 			echo "          \"cpu\": {"
-			echo "            \"user\": $(awk '{print $1}' <<< $AVGMETRICS),"
-			echo "            \"nice\": $(awk '{print $2}' <<< $AVGMETRICS),"
-			echo "            \"system\": $(awk '{print $3}' <<< $AVGMETRICS),"
-			echo "            \"iowait\": $(awk '{print $4}' <<< $AVGMETRICS),"
-			echo "            \"steal\": $(awk '{print $5}' <<< $AVGMETRICS)"
+			echo "            \"total\": $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS),"
+			echo "            \"user\": $($BIN_AWK '{print $1}' <<< $AVGMETRICS),"
+			echo "            \"nice\": $($BIN_AWK '{print $2}' <<< $AVGMETRICS),"
+			echo "            \"system\": $($BIN_AWK '{print $3}' <<< $AVGMETRICS),"
+			echo "            \"iowait\": $($BIN_AWK '{print $4}' <<< $AVGMETRICS),"
+			echo "            \"steal\": $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
 			echo "          },"
-			echo "          \"ram\": $(awk '{print $6}' <<< $AVGMETRICS)"
+			echo "          \"ram\": $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
 			echo "        }"
 		}
 
 		echo "{"
 		echo "  \"metadata\": {"
-		echo "    \"generator\": \"$(cat $DATADIR/metadata-generator)\","
-		echo "    \"version\": \"$(cat $DATADIR/metadata-version)\","
-		echo "    \"date\": \"$(cat $DATADIR/metadata-date)\","
-		echo "    \"server-node\": \"$(cat $DATADIR/metadata-server-node)\","
-		echo "    \"client-node\": \"$(cat $DATADIR/metadata-client-node)\""
+		echo "    \"generator\": \"$GENERATOR\","
+		echo "    \"version\": \"$VERSION\","
+		echo "    \"date\": \"$BENCHMARK_DATE\","
+		echo "    \"server-node\": \"$SERVER_NODE\","
+		echo "    \"client-node\": \"$CLIENT_NODE\""
 		echo "  },"
 		echo "  \"data\": {"
 		echo "    \"mtu\": $(cat $DATADIR/mtu),"
@@ -546,35 +563,37 @@ case $OUTPUT_FORMAT in
 		function compute-yaml-result {
 			POD_NAME=$1
 			echo "      bandwidth: $(cat $DATADIR/$POD_NAME.bw)"
-			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-client.avg)
+			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-client.avg)
 			$DEBUG && debug "pod $POD_NAME client metrics avg : $AVGMETRICS "
 			echo "      client:"
 			echo "        cpu:"
-			echo "          user: $(awk '{print $1}' <<< $AVGMETRICS)"
-			echo "          nice: $(awk '{print $2}' <<< $AVGMETRICS)"
-			echo "          system: $(awk '{print $3}' <<< $AVGMETRICS)"
-			echo "          iowait: $(awk '{print $4}' <<< $AVGMETRICS)"
-			echo "          steal: $(awk '{print $5}' <<< $AVGMETRICS)"
-			echo "        ram: $(awk '{print $6}' <<< $AVGMETRICS)"
+			echo "          total: $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS)"
+			echo "          user: $($BIN_AWK '{print $1}' <<< $AVGMETRICS)"
+			echo "          nice: $($BIN_AWK '{print $2}' <<< $AVGMETRICS)"
+			echo "          system: $($BIN_AWK '{print $3}' <<< $AVGMETRICS)"
+			echo "          iowait: $($BIN_AWK '{print $4}' <<< $AVGMETRICS)"
+			echo "          steal: $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
+			echo "        ram: $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
 
-			AVGMETRICS=$(awk 'NR==2' $DATADIR/$POD_NAME-server.avg)
+			AVGMETRICS=$($BIN_AWK 'NR==2' $DATADIR/$POD_NAME-server.avg)
 			$DEBUG && debug "pod $POD_NAME server metrics avg : $AVGMETRICS "
 			echo "      server:"
 			echo "        cpu:"
-			echo "          user: $(awk '{print $1}' <<< $AVGMETRICS)"
-			echo "          nice: $(awk '{print $2}' <<< $AVGMETRICS)"
-			echo "          system: $(awk '{print $3}' <<< $AVGMETRICS)"
-			echo "          iowait: $(awk '{print $4}' <<< $AVGMETRICS)"
-			echo "          steal: $(awk '{print $5}' <<< $AVGMETRICS)"
-			echo "        ram: $(awk '{print $6}' <<< $AVGMETRICS)"
+			echo "          total: $($BIN_AWK '{printf "%.2f",$1+$2+$3+$4+$5}' <<< $AVGMETRICS)"
+			echo "          user: $($BIN_AWK '{print $1}' <<< $AVGMETRICS)"
+			echo "          nice: $($BIN_AWK '{print $2}' <<< $AVGMETRICS)"
+			echo "          system: $($BIN_AWK '{print $3}' <<< $AVGMETRICS)"
+			echo "          iowait: $($BIN_AWK '{print $4}' <<< $AVGMETRICS)"
+			echo "          steal: $($BIN_AWK '{print $5}' <<< $AVGMETRICS)"
+			echo "        ram: $($BIN_AWK '{print $6}' <<< $AVGMETRICS)"
 		}
 
 		echo "metadata:"
-		echo "  generator: \"$(cat $DATADIR/metadata-generator)\""
-		echo "  version: \"$(cat $DATADIR/metadata-version)\""
-		echo "  date: \"$(cat $DATADIR/metadata-date)\""
-		echo "  server-node: \"$(cat $DATADIR/metadata-server-node)\""
-		echo "  client-node: \"$(cat $DATADIR/metadata-client-node)\""
+		echo "  generator: \"$GENERATOR\""
+		echo "  version: \"$VERSION\""
+		echo "  date: \"$BENCHMARK_DATE\""
+		echo "  server-node: \"$SERVER_NODE\""
+		echo "  client-node: \"$CLIENT_NODE\""
 		echo "data:"
 		echo "  mtu: \"$(cat $DATADIR/mtu)\""
 		echo "  idle:"
@@ -595,19 +614,19 @@ case $OUTPUT_FORMAT in
 		function compute-text-result {
 			POD_NAME=$1
 			echo "      bandwidth = $(cat $DATADIR/$POD_NAME.bw) Mbit/s"
-			# cpu-user cpu-nice cpu-system cpu-iowait cpu-steal memory-used records-number
-			echo "      client cpu = $(awk 'NR==2 {print "user "$1"%, nice "$2"%, system "$3"%, iowait "$4"%, steal "$5"%"}' $DATADIR/$POD_NAME-client.avg)"
-			echo "      server cpu = $(awk 'NR==2 {print "user "$1"%, nice "$2"%, system "$3"%, iowait "$4"%, steal "$5"%"}' $DATADIR/$POD_NAME-server.avg)"
-			echo "      client ram = $(awk 'NR==2 {print $6}' $DATADIR/$POD_NAME-client.avg) MB"
-			echo "      server ram = $(awk 'NR==2 {print $6}' $DATADIR/$POD_NAME-server.avg) MB"
+			echo "      client cpu = $($BIN_AWK 'NR==2 {printf "total %.2f%% (user %.2f%%, nice %.2f%%, system %.2f%%, iowait %.2f%%, steal %.2f%%)",$1+$2+$3+$4+$5,$1,$2,$3,$4,$5}' $DATADIR/$POD_NAME-client.avg)"
+			echo "      server cpu = $($BIN_AWK 'NR==2 {printf "total %.2f%% (user %.2f%%, nice %.2f%%, system %.2f%%, iowait %.2f%%, steal %.2f%%)",$1+$2+$3+$4+$5,$1,$2,$3,$4,$5}' $DATADIR/$POD_NAME-server.avg)"
+			echo "      client ram = $($BIN_AWK 'NR==2 {print $6}' $DATADIR/$POD_NAME-client.avg) MB"
+			echo "      server ram = $($BIN_AWK 'NR==2 {print $6}' $DATADIR/$POD_NAME-server.avg) MB"
 		}
+
 		echo "========================================================="
-		echo " Benchmark Results - $(cat $DATADIR/metadata-date) UTC"
+		echo " Benchmark Results - $BENCHMARK_DATE UTC"
 		echo "========================================================="
-		echo " Generator : $(cat $DATADIR/metadata-generator)"
-		echo " Version   : $(cat $DATADIR/metadata-version)"
-		echo " Server    : $(cat $DATADIR/metadata-server-node)"
-		echo " Client    : $(cat $DATADIR/metadata-client-node)"
+		echo " Generator : $GENERATOR"
+		echo " Version   : $VERSION"
+		echo " Server    : $SERVER_NODE"
+		echo " Client    : $CLIENT_NODE"
 		echo "========================================================="
 		echo "  Discovered MTU : $(cat $DATADIR/mtu)"
 		echo "  Idle :"
