@@ -10,6 +10,8 @@ Default CMD starts the /[monit.sh](monit.sh) script that will monitor the host u
 %cpu-user %cpu-nice %cpu-system %cpu-iowait %cpu-steal memory-used-MB timestamp
 ```
 
+Data produced per second : **40 bytes/s**
+
 ## Get metrics
 
 You can query a subset of data between two timestamp with the /[stats.sh](stats.sh) script :
