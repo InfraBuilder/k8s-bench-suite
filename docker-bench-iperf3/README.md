@@ -1,11 +1,4 @@
-Custom benchmark monitor for https://github.com/InfraBuilder/k8s-bench-suite
+Simple container image based on **Alpine 3** with package **iperf3**
 
-default command starts the /monit.sh script that will output a new line in `/data/metrics.log` each second with following information :
-```sh
-%cpu-user %cpu-nice %cpu-system %cpu-iowait %cpu-steal memory-used-MB timestamp
-```
+![Docker Image Size (tag)](https://img.shields.io/docker/image-size/infrabuilder/bench-iperf3/latest) [Dockerfile](https://github.com/InfraBuilder/k8s-bench-suite/blob/master/docker-bench-iperf3/Dockerfile)
 
-You can query a subset of data between two timestamp with the /stats.sh script :
-```sh
-sh /script.sh 1598047515 1598047530
-```
