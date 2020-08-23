@@ -9,12 +9,36 @@
 # Utility functions
 #==============================================================================
 
+[ "$(tput colors)" -gt 0 ] && COLOR="true" || COLOR="false"
+function color { 
+	$COLOR || return 0
+	color="0"
+	case $1 in
+		normal) color="0" ;;
+		rst) color="0" ;;
+		red) color="31" ;;
+		green) color="32" ;;
+		yellow) color="33" ;;
+		blue) color="34" ;;
+		magenta) color="35" ;;
+		cyan) color="36" ;;
+		lightred) color="91" ;;
+		lightgreen) color="92" ;;
+		lightyellow) color="93" ;;
+		lightblue) color="94" ;;
+		lightmagenta) color="95" ;;
+		lightcyan) color="96" ;;
+		white) color="97" ;;
+		*) color="0" ;;
+	esac
+	echo -e "\033[0;${color}m"
+}
 function logdate { date "+%Y-%m-%d %H:%M:%S"; }
-function fatal { echo "$(logdate) [FATAL] $@" >&2; cleanandexit 1; }
-function err { echo "$(logdate) [ERROR] $@" >&2; }
-function warn { [$DEBUG_LEVEL -ge 1 ] && echo "$(logdate) [WARNING] $@" >&2; }
-function info { [ $DEBUG_LEVEL -ge 2 ] && echo "$(logdate) [INFO] $@" >&2; }
-function debug { [ $DEBUG_LEVEL -ge 3 ] && echo "$(logdate) [DEBUG] $@" >&2; }
+function fatal { echo "$(logdate) $(color red)[FATAL]$(color normal) $@" >&2; cleanandexit 1; }
+function err { echo "$(logdate) $(color lightred)[ERROR]$(color normal) $@" >&2; }
+function warn { [$DEBUG_LEVEL -ge 1 ] && echo "$(logdate) $(color yellow)[WARNING]$(color normal) $@" >&2; }
+function info { [ $DEBUG_LEVEL -ge 2 ] && echo "$(logdate) $(color cyan)[INFO]$(color normal) $@" >&2; }
+function debug { [ $DEBUG_LEVEL -ge 3 ] && echo "$(logdate) $(color lightcyan)[DEBUG]$(color normal) $@" >&2; }
 
 function now { date +%s; }
 function cleanandexit {
@@ -58,23 +82,30 @@ function waitpod {
 # Default config
 #==============================================================================
 
-VERSION=1.2.0
-GENERATOR="github.com/InfraBuilder/k8s-bench-suite"
+VERSION=1.3.0
+GENERATOR="knb"
 BENCHMARK_DATE=$(date -u "+%Y-%m-%d %H:%M:%S")
 DEBUG=false
 DEBUG_LEVEL=0
 SERVER_NODE=""
 CLIENT_NODE=""
 EXECID="$$"
+BENCHMARK_RUN_NAME="knb-$EXECID"
 NAMESPACEOPT=""
 POD_WAIT_TIMEOUT="30"
 BENCHMARK_DURATION="10"
-SOCKET_BUFFER_SIZE="256K"
+SOCKET_BUFFER_SIZE="auto"
 RESSOURCE_TO_CLEAN_BEFORE_EXIT=""
 OUTPUT_FORMAT="text"
 FILENAME="/dev/stdout"
 CLEANDIR="true"
 FROM_DATA="false"
+
+RUN_TEST_IDLE="true"
+RUN_TEST_P2P_TCP="true"
+RUN_TEST_P2P_UDP="true"
+RUN_TEST_P2S_TCP="true"
+RUN_TEST_P2S_UDP="true"
 
 export LC_ALL=C # Trick to no depend on locale
 BIN_AWK="awk"
@@ -82,6 +113,31 @@ BIN_AWK="awk"
 #==============================================================================
 # Core functions
 #==============================================================================
+
+function detect-pod-failure-reason-and-fatal {
+	POD_NAME=$1
+	shift
+
+	CURRENTPHASE=$(kubectl get --request-timeout 2s $NAMESPACEOPT pod $POD_NAME -o jsonpath={.status.phase})
+	$DEBUG && debug "Trying to detect pod failure for pod '$POD_NAME' in phase '$CURRENTPHASE'"
+	case $CURRENTPHASE in
+		"Pending")
+			err "Pod $POD_NAME is still in Pending state, please check node name"
+			;;
+		"Failed")
+			# Is it a window size problem in iperf ?
+			kubectl logs $NAMESPACEOPT $POD_NAME \
+				| grep "iperf3: error - unable to write to stream socket: Message too large" > /dev/null \
+				&& err "Iperf message was too large, you should try a lower value with flag '-sbs' (current value is : $SOCKET_BUFFER_SIZE)" && return 0
+
+			;;
+		*) 
+			err "Unknown pod phase '$CURRENTPHASE' for pod '$POD_NAME'" 
+			;;
+	esac
+
+	fatal $@
+}
 
 function usage {
 	cat <<-EOF
@@ -95,22 +151,34 @@ function usage {
 	=====[ Benchmark mode ]====================================================
 
 	 Mandatory flags :
+
 	    -cn <nodename>
 	    --client-node <nodename>    : Define kubernetes node name that will host the client part
+
 	    -sn <nodename>
 	    --server-node <nodename>    : Define kubernetes node name that will host the server part
 	
 	 Optionnal flags :
 	    -d <time-in-scd>
-	    --duration <time-in-scd>    : Set the benchmark duration for each test in seconds. (Default ${BENCHMARK_DURATION})
+	    --duration <time-in-scd>    : Set the benchmark duration for each test in seconds (Default ${BENCHMARK_DURATION})
+
 	    -k
-	    --keep                      : Keep data directory instead of cleaning it (contains raw benchmark data)
+	    --keep                      : Keep data directory instead of cleaning it (tmp dir that contains raw benchmark data)
+
 	    -n <namespace>
 	    --namespace <namespace>     : Set the target kubernetes namespace
+
+	    --name <name>               : Set the name of this benchmark run
+
+	    -ot <testlist>
+	    --only-tests <testlist>     : Only run a subset of benchmark tests, comma separated (Ex: -ot tcp,idle)
+	                                  Possible values: all, tcp, udp, p2p, p2s , p2ptcp, p2pudp, p2stcp, p2sudp, idle
+
 	    -sbs <size>
-	    --socket-buffer-size <size> : Set the socket buffer size (Default: $SOCKET_BUFFER_SIZE)
+	    --socket-buffer-size <size> : Set the socket buffer size with unit, or 'auto'. ex: '256K' (Default: $SOCKET_BUFFER_SIZE)
+
 	    -t <time-in-scd>
-	    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds. (Default ${POD_WAIT_TIMEOUT})
+	    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds (Default ${POD_WAIT_TIMEOUT})
 
 	=====[ From Data mode ]====================================================
 
@@ -121,15 +189,23 @@ function usage {
 	=====[ Common optionnal flags ]============================================
 
 	    --debug                     : Set the debug level to "debug"
-	    --debug-level <level>       : Set the debug level (values: standard, warn, info, debug) 
-	    -h
-	    --help                      : Display this help message
+
+	    -dl <level>
+	    --debug-level <level>       : Set the debug level
+	                                  Possible values: standard, warn, info, debug
+	    
 	    -f <filepath>
 	    --file <filepath>           : Set the output file
+
+	    -h
+	    --help                      : Display this help message
+
 	    -o <format>
-	    --output <format>           : Set the output format (values: text, yaml, json, data)
+	    --output <format>           : Set the output format
+	                                  Possible values: text, yaml, json, data
 	    -v
 	    --verbose                   : Activate the verbose mode by setting debug-level to 'info'
+		
 	    -V
 	    --version                   : Show current script version
 
@@ -150,17 +226,31 @@ function usage {
 	  | knb -fd mybench.knbdata -o json                                       |
 	  -------------------------------------------------------------------------
 
+	  Run only idle and tcp benchmark :
+	  -------------------------------------------------------------------------
+	  | knb -cn clientnode -sn servernode -ot idle,tcp                        |
+	  -------------------------------------------------------------------------
+	  
 EOF
 }
 
 function run-client {
 	POD_NAME=$1
 	TARGET=$2
+
+	SOCKET_BUFFER_FLAG=""
+	if [ "$SOCKET_BUFFER_SIZE" = "auto" ]
+	then
+		SOCKET_BUFFER_FLAG=""
+	else
+		SOCKET_BUFFER_FLAG="-w $SOCKET_BUFFER_SIZE"
+	fi
+
 	CMD=""
 	case $3 in
 		idle) CMD="sleep $BENCHMARK_DURATION; echo 0 0 0 0 0 0 0 receiver" ;;
-		udp) CMD="iperf3 -u -b 0 -c $TARGET -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION" ;;
-		tcp) CMD="iperf3 -c $TARGET -O 1 -w $SOCKET_BUFFER_SIZE -f m -t $BENCHMARK_DURATION" ;;
+		udp) CMD="iperf3 -u -b 0 -c $TARGET -O 1 $SOCKET_BUFFER_FLAG -f m -t $BENCHMARK_DURATION" ;;
+		tcp) CMD="iperf3 -c $TARGET -O 1 $SOCKET_BUFFER_FLAG -f m -t $BENCHMARK_DURATION" ;;
 		*) fatal "Unknown benchmark type '$2'" ;;
 	esac
 
@@ -189,7 +279,7 @@ function run-client {
 
 	# Waiting for Pod to be Running
 	kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
-		|| fatal "Failed to start pod $POD_NAME until timeout"
+		|| detect-pod-failure-reason-and-fatal $POD_NAME "Failed to start pod $POD_NAME until timeout"
 	
 	STARTTIME=$(now)
 	ENDTIME=$(( $STARTTIME + $BENCHMARK_DURATION ))
@@ -235,7 +325,6 @@ function run-client {
 }
 
 function compute-data-result {
-
 	(cd $DATADIR; tar -czf - .)
 }
 
@@ -277,33 +366,58 @@ function compute-json-result {
 
 	echo "{"
 	echo "  \"metadata\": {"
+	echo "    \"name\": \"$BENCHMARK_RUN_NAME\","
 	echo "    \"generator\": \"$GENERATOR\","
 	echo "    \"version\": \"$VERSION\","
 	echo "    \"date\": \"$BENCHMARK_DATE\","
 	echo "    \"server-node\": \"$SERVER_NODE\","
 	echo "    \"client-node\": \"$CLIENT_NODE\""
+	echo "    \"socket-buffer-size\": \"$SOCKET_BUFFER_SIZE\""
 	echo "  },"
 	echo "  \"data\": {"
 	echo "    \"mtu\": $(cat $DATADIR/mtu),"
-	echo "    \"idle\": {"
+	if [ "${IDLE_POD_NAME}" != "" ]
+	then
+		echo "    \"idle\": {"
 		compute-json-result-for-pod $IDLE_POD_NAME 6
-	echo "    },"
-	echo "    \"pod2pod\": {"
-	echo "      \"tcp\": {"
-		compute-json-result-for-pod $CLIENT_TCP_P2P_POD_NAME 8
-	echo "      },"
-	echo "      \"udp\": {"
-		compute-json-result-for-pod $CLIENT_UDP_P2P_POD_NAME 8
-	echo "      }"
-	echo "    },"
-	echo "    \"pod2svc\": {"
-	echo "      \"tcp\": {"
-		compute-json-result-for-pod $CLIENT_TCP_P2S_POD_NAME 8
-	echo "      },"
-	echo "      \"udp\": {"
-		compute-json-result-for-pod $CLIENT_UDP_P2S_POD_NAME 8
-	echo "      }"
-	echo "    }"
+		echo "    },"
+	fi
+
+	if [ "${CLIENT_TCP_P2P_POD_NAME}${CLIENT_UDP_P2P_POD_NAME}" != "" ]
+	then
+		echo "    \"pod2pod\": {"
+		if [ "${CLIENT_TCP_P2P_POD_NAME}" != "" ]
+		then
+			echo "      \"tcp\": {"
+			compute-json-result-for-pod $CLIENT_TCP_P2P_POD_NAME 8
+			echo "      },"
+		fi
+		if [ "${CLIENT_UDP_P2P_POD_NAME}" != "" ]
+		then
+			echo "      \"udp\": {"
+			compute-json-result-for-pod $CLIENT_UDP_P2P_POD_NAME 8
+			echo "      }"
+		fi
+		echo "    },"
+	fi
+
+	if [ "${CLIENT_TCP_P2S_POD_NAME}${CLIENT_UDP_P2S_POD_NAME}" != "" ]
+	then
+		echo "    \"pod2svc\": {"
+		if [ "${CLIENT_TCP_P2S_POD_NAME}" != "" ]
+		then
+			echo "      \"tcp\": {"
+			compute-json-result-for-pod $CLIENT_TCP_P2S_POD_NAME 8
+			echo "      },"
+		fi
+		if [ "${CLIENT_UDP_P2S_POD_NAME}" != "" ]
+		then
+			echo "      \"udp\": {"
+			compute-json-result-for-pod $CLIENT_UDP_P2S_POD_NAME 8
+			echo "      }"
+		fi
+		echo "    }"
+	fi
 	echo "  }"
 	echo "}"
 }
@@ -341,25 +455,48 @@ function compute-yaml-result {
 	}
 
 	echo "metadata:"
+	echo "  name: \"$BENCHMARK_RUN_NAME\""
 	echo "  generator: \"$GENERATOR\""
 	echo "  version: \"$VERSION\""
 	echo "  date: \"$BENCHMARK_DATE\""
 	echo "  server-node: \"$SERVER_NODE\""
 	echo "  client-node: \"$CLIENT_NODE\""
+	echo "  socket-buffer-size: \"$SOCKET_BUFFER_SIZE\""
 	echo "data:"
 	echo "  mtu: \"$(cat $DATADIR/mtu)\""
-	echo "  idle:"
+	if [ "${IDLE_POD_NAME}" != "" ]
+	then
+		echo "  idle:"
 		compute-yaml-result-for-pod $IDLE_POD_NAME 4
-	echo "  pod2pod:"
-	echo "    tcp:"
-		compute-yaml-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
-	echo "    udp:"
-		compute-yaml-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
-	echo "  pod2svc:"
-	echo "    tcp:"
-		compute-yaml-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
-	echo "    udp:"
-		compute-yaml-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
+	fi
+	if [ "${CLIENT_TCP_P2P_POD_NAME}${CLIENT_UDP_P2P_POD_NAME}" != "" ]
+	then
+		echo "  pod2pod:"
+		if [ "${CLIENT_TCP_P2P_POD_NAME}" != "" ]
+		then
+			echo "    tcp:"
+			compute-yaml-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
+		fi
+		if [ "${CLIENT_UDP_P2P_POD_NAME}" != "" ]
+		then
+			echo "    udp:"
+			compute-yaml-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
+		fi
+	fi
+	if [ "${CLIENT_TCP_P2S_POD_NAME}${CLIENT_UDP_P2S_POD_NAME}" != "" ]
+	then
+		echo "  pod2svc:"
+		if [ "${CLIENT_TCP_P2S_POD_NAME}" != "" ]
+		then
+			echo "    tcp:"
+			compute-yaml-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
+		fi
+		if [ "${CLIENT_UDP_P2S_POD_NAME}" != "" ]
+		then
+			echo "    udp:"
+			compute-yaml-result-for-pod $CLIENT_UDP_P2S_POD_NAME 6
+		fi
+	fi
 }
 
 function compute-text-result {
@@ -374,28 +511,53 @@ function compute-text-result {
 	}
 
 	echo "========================================================="
-	echo " Benchmark Results - $BENCHMARK_DATE UTC"
+	echo " Benchmark Results"
 	echo "========================================================="
-	echo " Generator : $GENERATOR"
-	echo " Version   : $VERSION"
-	echo " Server    : $SERVER_NODE"
-	echo " Client    : $CLIENT_NODE"
+	echo " Name        : $BENCHMARK_RUN_NAME"
+	echo " Date        : $BENCHMARK_DATE UTC"
+	echo " Generator   : $GENERATOR"
+	echo " Version     : $VERSION"
+	echo " Server      : $SERVER_NODE"
+	echo " Client      : $CLIENT_NODE"
+	echo " Socket size : $SOCKET_BUFFER_SIZE"
 	echo "========================================================="
 	echo "  Discovered MTU : $(cat $DATADIR/mtu)"
-	echo "  Idle :"
+	if [ "${IDLE_POD_NAME}" != "" ]
+	then
+		echo "  Idle :"
 		compute-text-result-for-pod $IDLE_POD_NAME 4
-	echo "  Pod to pod :"
-	echo "    TCP :"
-		compute-text-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
-	echo "    UDP :"
-		compute-text-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
-	echo "  Pod to Service :"
-	echo "    TCP :"
-		compute-text-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
-	echo "    UDP :"
-		compute-text-result-for-pod $CLIENT_UDP_P2S_POD_NAME 6
-	echo "========================================================="
-}
+	fi
+	if [ "${CLIENT_TCP_P2P_POD_NAME}${CLIENT_UDP_P2P_POD_NAME}" != "" ]
+	then
+		echo "  Pod to pod :"
+		if [ "${CLIENT_TCP_P2P_POD_NAME}" != "" ]
+		then
+			echo "    TCP :"
+			compute-text-result-for-pod $CLIENT_TCP_P2P_POD_NAME 6
+		fi
+		if [ "${CLIENT_UDP_P2P_POD_NAME}" != "" ]
+		then
+			echo "    UDP :"
+			compute-text-result-for-pod $CLIENT_UDP_P2P_POD_NAME 6
+		fi
+	fi
+
+	if [ "${CLIENT_TCP_P2S_POD_NAME}${CLIENT_UDP_P2S_POD_NAME}" != "" ]
+	then
+		echo "  Pod to Service :"
+		if [ "${CLIENT_TCP_P2S_POD_NAME}" != "" ]
+		then
+			echo "    TCP :"; 
+			compute-text-result-for-pod $CLIENT_TCP_P2S_POD_NAME 6
+		fi
+		if [ "${CLIENT_UDP_P2S_POD_NAME}" != "" ]
+		then
+			echo "    UDP :"
+			compute-text-result-for-pod $CLIENT_UDP_P2S_POD_NAME 6
+		fi
+		echo "========================================================="
+	fi
+}	
 
 function generate-report {
 	case $OUTPUT_FORMAT in
@@ -435,52 +597,171 @@ while [ "$1" != "" ]
 do
 	arg=$1
 	case $arg in
+		#--- Benchmark mode - Mandatory flags ---------------------------------
+
+		# Define kubernetes node name that will host the client part
 		--server-node|-sn)
 			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			SERVER_NODE=$1
 			info "Server node will be '$SERVER_NODE'"
 			;;
+		
+		# Define kubernetes node name that will host the server part
 		--client-node|-cn)
 			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			CLIENT_NODE=$1
 			info "Client node will be '$CLIENT_NODE'"
 			;;
+
+		#--- Benchmark mode - Optionnal flags ---------------------------------
+		
+		# Set the benchmark duration for each test in seconds
+		--duration|-d)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			BENCHMARK_DURATION="$1"
+			info "Setting benchmark duration to ${1}s"
+			;;
+		
+		# Keep data directory instead of cleaning it (tmp dir that contains raw benchmark data)
+		--keep|-k)
+			CLEANDIR="false"
+			info "Keeping datadir after benchmark run"
+			;;
+		
+		# Set the target kubernetes namespace
 		--namespace|-n)
 			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			NAMESPACEOPT="--namespace $1"
 			info "Setting target namespace to '$1'"
 			;;
+		
+		# Set the name of this benchmark run
+		--name)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			BENCHMARK_RUN_NAME="$1"
+			info "Setting benchmark run nameto '$1'"
+			;;
+
+		# Only run a subset of benchmark tests, comma separated (Ex: -ot tcp,idle)
+		--only-tests|-ot)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			
+			RUN_TEST_IDLE="false"
+			RUN_TEST_P2P_TCP="false"
+			RUN_TEST_P2P_UDP="false"
+			RUN_TEST_P2S_TCP="false"
+			RUN_TEST_P2S_UDP="false"
+
+			for i in $(awk '{gsub(/,/," ");print}' <<< "$1")
+			do
+				case $i in
+					all)
+						RUN_TEST_P2P_TCP="true"
+						RUN_TEST_P2P_UDP="true"
+						RUN_TEST_P2S_TCP="true"
+						RUN_TEST_P2S_UDP="true"
+						RUN_TEST_IDLE="true"
+						;;
+					p2p)
+						RUN_TEST_P2P_TCP="true"
+						RUN_TEST_P2P_UDP="true"
+						;;
+					p2s)
+						RUN_TEST_P2S_TCP="true"
+						RUN_TEST_P2S_UDP="true"
+						;;
+					tcp)
+						RUN_TEST_P2P_TCP="true"
+						RUN_TEST_P2S_TCP="true"
+						;;
+					udp)
+						RUN_TEST_P2P_UDP="true"
+						RUN_TEST_P2S_UDP="true"
+						;;
+					p2ptcp) RUN_TEST_P2P_TCP="true" ;;
+					p2pudp) RUN_TEST_P2P_UDP="true" ;;
+					p2stcp) RUN_TEST_P2S_TCP="true" ;;
+					p2sudp) RUN_TEST_P2S_UDP="true" ;;
+					idle) RUN_TEST_IDLE="true" ;;
+					*) fatal "Unknown test slug '${i}', " ;;
+				esac
+			done
+			info "Benchmark will run only following tests: ${1}"
+			;;
+		
+		# Set the socket buffer size with unit, or 'auto'. ex: '256K' 
+		--socket-buffer-size|-sbs)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			SOCKET_BUFFER_SIZE="$1"
+			info "Setting socket buffer size to ${1}"
+			;;
+
+		# Set the pod ready wait timeout in seconds
 		--timeout|-t)
 			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			POD_WAIT_TIMEOUT="$1"
-			info "Setting timeout to ${1}s"
+			info "Setting pod wait timeout to ${1}s"
 			;;
+
+		#--- From Data - Mandatory flags --------------------------------------
+
+		# Define the path to the data to read from
 		--from-data|-fd)
 			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			FROM_DATA="true"
 			CLEANDIR="false"
 			DATADIR="$1"
 			info "Benchmark will not run, report will be generated from ${1}"
 			;;
-		--socket-buffer-size|-sbs)
-			shift
-			SOCKET_BUFFER_SIZE="$1"
-			info "Setting socket buffer size to ${1}"
+		
+		#--- Common - Optionnal flags -----------------------------------------
+		
+		# Set the debug level to "debug"
+		--debug)
+			DEBUG_LEVEL=3;
+			DEBUG=true;
+			debug "Mode debug ON"
 			;;
-		--duration|-d)
+
+		# Set the debug level 
+		--debug-level|-dl)
 			shift
-			BENCHMARK_DURATION="$1"
-			info "Setting benchmark duration to ${1}s"
+			case $1 in
+				standard|0) DEBUG_LEVEL=0; DEBUG=false;;
+				warn|1) DEBUG_LEVEL=1; DEBUG=false;;
+				info|2) DEBUG_LEVEL=2; DEBUG=false;;
+				debug|3) DEBUG_LEVEL=3; DEBUG=true; debug "Mode debug ON";;
+				*) fatal "Unknown debug level '$1'. Here is a list of acceptable debug levels : standard, warn, info, debug";;
+			esac
 			;;
+
+		# Set the output file
 		--file|-f)
 			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			FILENAME="$1"
 			[ "$FILENAME" = "-" ] && FILENAME="/dev/stdout"
 			info "Output file set to ${FILENAME}"
 			;;
+
+		# Display help message
+		--help|-h)
+			usage && exit
+			;;
+
+		# Set the output format
 		--output|-o)
 			shift
-			
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			# Checking values
 			case $1 in
 				json) ;;
@@ -493,35 +774,19 @@ do
 			info "Setting output format to ${1}s"
 			OUTPUT_FORMAT="$1"
 			;;
-		--keep|-k)
-			CLEANDIR="false"
-			info "Keeping datadir after benchmark run"
-			;;
+		
+		# Activate the verbose mode by setting debug-level to 'info'
 		--verbose|-v)
 			DEBUG_LEVEL=2
 			;;
+
+		# Show current script version
 		--version|-V)
 			echo "$VERSION" 
 			exit
 			;;
-		--debug)
-			DEBUG_LEVEL=3;
-			DEBUG=true;
-			debug "Mode debug ON"
-			;;
-		--debug-level)
-			shift
-			case $1 in
-				standard|0) DEBUG_LEVEL=0; DEBUG=false;;
-				warn|1) DEBUG_LEVEL=1; DEBUG=false;;
-				info|2) DEBUG_LEVEL=2; DEBUG=false;;
-				debug|3) DEBUG_LEVEL=3; DEBUG=true; debug "Mode debug ON";;
-				*) fatal "Unknown debug level '$1'. Here is a list of acceptable debug levels : standard, warn, info, debug";;
-			esac
-			;;
-		--help|-h)
-			usage && exit
-			;;
+		
+		# Unknown flag
 		*) UNKNOWN_ARGLIST="$UNKNOWN_ARGLIST $arg" ;;
 	esac
 	shift
@@ -536,10 +801,12 @@ $DEBUG && debug "Argument parsing done"
 
 [ "$FILENAME" = "/dev/stdout" -a "$OUTPUT_FORMAT" = "data" ] && fatal "I cowardly refuse to output data on stdout, please use '-f' flag"
 
+#--- Mode detection ---------------------------------------
+
 # We do not run benchmark test, we source from existing data
 if $FROM_DATA
 then
-	$DEBUG && debug "Entering from data report generation"
+	$DEBUG && debug "Running in 'from data' mode"
 
 	# Data source is a directory, let's source data
 	if [ -d "$DATADIR" -a -f "$DATADIR/env" ]
@@ -577,6 +844,10 @@ then
 	cleanandexit
 fi
 
+$DEBUG && debug "Running in 'benchmark' mode"
+
+#--- Node name check --------------------------------------
+
 [ "$SERVER_NODE" = "" -o "$CLIENT_NODE" = "" ] \
 	&& fatal "Both client node and server node must be set (--server-node and --client-node)"
 
@@ -588,38 +859,26 @@ DATADIR="$(mktemp -d)"
 
 # Generating pod names
 MONITOR_SERVER_POD_NAME="knb-monitor-server-$EXECID"
-$DEBUG && debug "Server monitor pod name will be $MONITOR_SERVER_POD_NAME"
-
 MONITOR_CLIENT_POD_NAME="knb-monitor-client-$EXECID"
-$DEBUG && debug "Client monitor pod name will be $MONITOR_CLIENT_POD_NAME"
-
 SERVER_POD_NAME="knb-server-$EXECID"
 SERVER_SERVICE_NAME=$SERVER_POD_NAME
-$DEBUG && debug "Server pod name will be $SERVER_POD_NAME"
 
-IDLE_POD_NAME="knb-client-idle-$EXECID"
-$DEBUG && debug "Client Idle pod name will be $IDLE_POD_NAME"
-
-CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
-$DEBUG && debug "Client TCP P2P pod name will be $CLIENT_TCP_P2P_POD_NAME"
-
-CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
-$DEBUG && debug "Client UDP P2P pod name will be $CLIENT_UDP_P2P_POD_NAME"
-
-CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
-$DEBUG && debug "Client TCP P2S pod name will be $CLIENT_TCP_P2S_POD_NAME"
-
-CLIENT_UDP_P2S_POD_NAME="knb-client-udp-p2s-$EXECID"
-$DEBUG && debug "Client UDP P2S pod name will be $CLIENT_UDP_P2S_POD_NAME"
-
+$RUN_TEST_IDLE && IDLE_POD_NAME="knb-client-idle-$EXECID"
+$RUN_TEST_P2P_TCP && CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
+$RUN_TEST_P2P_UDP && CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
+$RUN_TEST_P2S_TCP && CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
+$RUN_TEST_P2S_UDP && CLIENT_UDP_P2S_POD_NAME="knb-client-udp-p2s-$EXECID"
 
 # Creating env file with metadata
 cat <<EOF > $DATADIR/env
+BENCHMARK_RUN_NAME="$BENCHMARK_RUN_NAME"
 GENERATOR="$GENERATOR"
 VERSION="$VERSION"
 BENCHMARK_DATE="$BENCHMARK_DATE"
 SERVER_NODE="$SERVER_NODE"
 CLIENT_NODE="$CLIENT_NODE"
+
+SOCKET_BUFFER_SIZE="$SOCKET_BUFFER_SIZE"
 
 MONITOR_SERVER_POD_NAME="$MONITOR_SERVER_POD_NAME"
 MONITOR_CLIENT_POD_NAME="$MONITOR_CLIENT_POD_NAME"
@@ -663,7 +922,7 @@ RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_SER
 
 info "Waiting for server monitor to be running"
 waitpod $MONITOR_SERVER_POD_NAME Running $POD_WAIT_TIMEOUT \
-	|| fatal "Failed to start server monitor pod"
+	|| detect-pod-failure-reason-and-fatal $MONITOR_SERVER_POD_NAME "Failed to start server monitor pod"
 
 #--- Client monitor --------------------------------
 info "Deploying client monitor on node $CLIENT_NODE"
@@ -686,7 +945,7 @@ RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_CLI
 
 info "Waiting for client monitor to be running"
 waitpod $MONITOR_CLIENT_POD_NAME Running $POD_WAIT_TIMEOUT \
-	|| fatal "Failed to start client monitor pod"
+	|| detect-pod-failure-reason-and-fatal $MONITOR_CLIENT_POD_NAME "Failed to start client monitor pod"
 
 #==============================================================================
 # Starting server
@@ -732,7 +991,7 @@ RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_
 
 info "Waiting for server to be running"
 kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$SERVER_POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
-	|| fatal "Failed to start server pod"
+	|| detect-pod-failure-reason-and-fatal $SERVER_POD_NAME "Failed to start server pod"
 
 SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_POD_NAME -o jsonpath={.status.podIP})
 $DEBUG && debug "Server IP address is $SERVER_IP"
@@ -751,19 +1010,44 @@ echo $CNI_MTU > $DATADIR/mtu
 
 #--- Idle measurment  -------------------------------------
 
-run-client $IDLE_POD_NAME $SERVER_IP idle
+if [ "$IDLE_POD_NAME" != "" ]
+then
+	run-client $IDLE_POD_NAME $SERVER_IP idle
+else
+	info "Skipping Idle test"
+fi
 
 #--- Pod to pod -------------------------------------------
 
-run-client $CLIENT_TCP_P2P_POD_NAME $SERVER_IP tcp
+if [ "$CLIENT_TCP_P2P_POD_NAME" != "" ]
+then
+	run-client $CLIENT_TCP_P2P_POD_NAME $SERVER_IP tcp
+else
+	info "Skipping P2P TCP test"
+fi
 
-run-client $CLIENT_UDP_P2P_POD_NAME $SERVER_IP udp
+if [ "$CLIENT_UDP_P2P_POD_NAME" != "" ]
+then
+	run-client $CLIENT_UDP_P2P_POD_NAME $SERVER_IP udp
+else
+	info "Skipping P2P UDP test"
+fi
 
 #--- Pod to Service ---------------------------------------
 
-run-client $CLIENT_TCP_P2S_POD_NAME $SERVER_SERVICE_NAME tcp
+if [ "$CLIENT_TCP_P2S_POD_NAME" != "" ]
+then
+	run-client $CLIENT_TCP_P2S_POD_NAME $SERVER_SERVICE_NAME tcp
+else
+	info "Skipping P2S TCP test"
+fi
 
-run-client $CLIENT_UDP_P2S_POD_NAME $SERVER_SERVICE_NAME udp
+if [ "$CLIENT_UDP_P2S_POD_NAME" != "" ]
+then
+	run-client $CLIENT_UDP_P2S_POD_NAME $SERVER_SERVICE_NAME udp
+else
+	info "Skipping P2S UDP test"
+fi
 
 #==============================================================================
 # Output

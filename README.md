@@ -9,12 +9,13 @@ Here are some highlights:
 
 - **Plain bash script** with very few dependencies
 - Complete benchmark **takes only 2 minutes**
+- Ability to select only a subset of benchmark tests to run
 - Testing **both TCP and UDP** bandwidth
 - **Automatic detection of CNI MTU**
 - **Includes host cpu and ram monitoring** in benchmark report
-- No ssh access, just an access to the target cluster through standard kubectl
+- No ssh access required, just an access to the target cluster through **standard kubectl**
 - **No need for high privileges**, the script will just launch very lightweight pods on two nodes.
-- Based on very lights containers images :
+- Based on **very lights containers** images :
   - ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/infrabuilder/bench-iperf3/latest) [infrabuilder/bench-iperf3](https://hub.docker.com/r/infrabuilder/bench-iperf3), is used to run benchmark tests
   - ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/infrabuilder/bench-custom-monitor/latest) [infrabuilder/bench-custom-monitor](https://hub.docker.com/r/infrabuilder/bench-custom-monitor), is used to monitor nodes
 
@@ -40,6 +41,50 @@ Choose two nodes to act as server/client on your cluster (for example node1 and 
 
 If you omit the `--verbose` flag, it will also complete, but you will have no output until the end of the benchmark.
 
+### Examples
+
+- Simple benchmark from "node1" to "node2" in **verbose** mode :
+
+  ```bash
+  knb -v -cn node1 -sn node2
+  ```
+
+- Benchmark from "nA" to "nB" and **save data** in file `mybench.knbdata` 
+
+  ```bash 
+  knb -cn nA -sn nB -o data -f mybench.knbdata
+  ```
+
+- Generate report **in json** from **previous benchmark** data file `mybench.knbdata`
+
+  ```bash
+  knb -fd mybench.knbdata -o json
+  ```
+
+- To run benchmark from node A to node B, showing only result **in yaml** format : 
+
+  ```bash
+  knb -cn A -sn B -o yaml
+  ```
+
+- To run benchmark from node Asterix to node Obelix, with the **most verbose output** and a result as **json** in a `res.json` file :
+
+  ```bash
+  knb --debug -cn Asterix -sn Obelix -o json -f res.json
+  ```
+
+- Running benchmark **in namespace** `myns` :
+
+  ```bash
+  knb -n myns -cn node1 -sn node2
+  ```
+
+- Run **only idle and tcp** benchmark :
+
+  ```bash
+  knb -cn clientnode -sn servernode -ot idle,tcp
+  ```
+
 ### Usage
 
 To display usage, use the `-h` flag :
@@ -56,22 +101,34 @@ There are two modes :
 =====[ Benchmark mode ]====================================================
 
  Mandatory flags :
+
     -cn <nodename>
     --client-node <nodename>    : Define kubernetes node name that will host the client part
+
     -sn <nodename>
     --server-node <nodename>    : Define kubernetes node name that will host the server part
 
  Optionnal flags :
     -d <time-in-scd>
-    --duration <time-in-scd>    : Set the benchmark duration for each test in seconds. (Default 10)
+    --duration <time-in-scd>    : Set the benchmark duration for each test in seconds (Default 10)
+
     -k
-    --keep                      : Keep data directory instead of cleaning it (contains raw benchmark data)
+    --keep                      : Keep data directory instead of cleaning it (tmp dir that contains raw benchmark data)
+
     -n <namespace>
     --namespace <namespace>     : Set the target kubernetes namespace
+
+    --name <name>               : Set the name of this benchmark run
+
+    -ot <testlist>
+    --only-tests <testlist>     : Only run a subset of benchmark tests, comma separated (Ex: -ot tcp,idle)
+                                  Possible values: all, tcp, udp, p2p, p2s , p2ptcp, p2pudp, p2stcp, p2sudp, idle
+
     -sbs <size>
-    --socket-buffer-size <size> : Set the socket buffer size (Default: 256K)
+    --socket-buffer-size <size> : Set the socket buffer size with unit, or 'auto'. ex: '256K' (Default: auto)
+
     -t <time-in-scd>
-    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds. (Default 30)
+    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds (Default 30)
 
 =====[ From Data mode ]====================================================
 
@@ -82,15 +139,23 @@ Mandatory flags :
 =====[ Common optionnal flags ]============================================
 
     --debug                     : Set the debug level to "debug"
-    --debug-level <level>       : Set the debug level (values: standard, warn, info, debug)
-    -h
-    --help                      : Display this help message
+
+    -dl <level>
+    --debug-level <level>       : Set the debug level
+                                  Possible values: standard, warn, info, debug
+
     -f <filepath>
     --file <filepath>           : Set the output file
+
+    -h
+    --help                      : Display this help message
+
     -o <format>
-    --output <format>           : Set the output format (values: text, yaml, json, data)
+    --output <format>           : Set the output format
+                                  Possible values: text, yaml, json, data
     -v
     --verbose                   : Activate the verbose mode by setting debug-level to 'info'
+
     -V
     --version                   : Show current script version
 
@@ -110,45 +175,10 @@ Mandatory flags :
   -------------------------------------------------------------------------
   | knb -fd mybench.knbdata -o json                                       |
   -------------------------------------------------------------------------
+
+  Run only idle and tcp benchmark :
+  -------------------------------------------------------------------------
+  | knb -cn clientnode -sn servernode -ot idle,tcp                        |
+  -------------------------------------------------------------------------
 ```
-
-### More examples
-
-- Simple benchmark from "node1" to "node2" in verbose mode :
-
-  ```bash
-  knb -v -cn node1 -sn node2
-  ```
-
-- Benchmark from "nA" to "nB" and save data in file `mybench.knbdata` 
-
-  ```bash 
-  knb -cn nA -sn nB -o data -f mybench.knbdata
-  ```
-
-- Generate report in json from previous benchmark data file `mybench.knbdata`
-
-  ```bash
-  knb -fd mybench.knbdata -o json
-  ```
-
-- To run benchmark from node A to node B, showing only result in yaml format : 
-
-  ```bash
-  knb -cn A -sn B -o yaml
-  ```
-
-- To run benchmark from node Asterix to node Obelix, with the most verbose output and a result as json in a `res.json` file :
-
-  ```bash
-  knb --debug -cn Asterix -sn Obelix -o json > res.json
-  ```
-
-- Running benchmark in namespace "myns" :
-
-  ```bash
-  knb -n myns -cn node1 -sn node2
-  ```
-
-  
 
