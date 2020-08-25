@@ -175,7 +175,7 @@ function usage {
 	                                  Possible values: all, tcp, udp, p2p, p2s , p2ptcp, p2pudp, p2stcp, p2sudp, idle
 
 	    -sbs <size>
-	    --socket-buffer-size <size> : Set the socket buffer size with unit, or 'auto'. ex: '256K' (Default: $SOCKET_BUFFER_SIZE)
+	    --socket-buffer-size <size> : Set the UDP socket buffer size with unit, or 'auto'. ex: '256K' (Default: $SOCKET_BUFFER_SIZE)
 
 	    -t <time-in-scd>
 	    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds (Default ${POD_WAIT_TIMEOUT})
@@ -250,7 +250,7 @@ function run-client {
 	case $3 in
 		idle) CMD="sleep $BENCHMARK_DURATION; echo 0 0 0 0 0 0 0 receiver" ;;
 		udp) CMD="iperf3 -u -b 0 -c $TARGET -O 1 $SOCKET_BUFFER_FLAG -f m -t $BENCHMARK_DURATION" ;;
-		tcp) CMD="iperf3 -c $TARGET -O 1 $SOCKET_BUFFER_FLAG -f m -t $BENCHMARK_DURATION" ;;
+		tcp) CMD="iperf3 -c $TARGET -O 1 -f m -t $BENCHMARK_DURATION" ;;
 		*) fatal "Unknown benchmark type '$2'" ;;
 	esac
 
@@ -278,7 +278,8 @@ function run-client {
 	RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$POD_NAME"
 
 	# Waiting for Pod to be Running
-	kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
+	kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$POD_NAME \
+		--timeout=${POD_WAIT_TIMEOUT}s >/dev/null 2>/dev/null \
 		|| detect-pod-failure-reason-and-fatal $POD_NAME "Failed to start pod $POD_NAME until timeout"
 	
 	STARTTIME=$(now)
@@ -706,7 +707,7 @@ do
 			shift
 			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			SOCKET_BUFFER_SIZE="$1"
-			info "Setting socket buffer size to ${1}"
+			info "Setting UDP socket buffer size to ${1}"
 			;;
 
 		# Set the pod ready wait timeout in seconds

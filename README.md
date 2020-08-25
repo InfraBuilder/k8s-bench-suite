@@ -125,7 +125,7 @@ There are two modes :
                                   Possible values: all, tcp, udp, p2p, p2s , p2ptcp, p2pudp, p2stcp, p2sudp, idle
 
     -sbs <size>
-    --socket-buffer-size <size> : Set the socket buffer size with unit, or 'auto'. ex: '256K' (Default: auto)
+    --socket-buffer-size <size> : Set the UDP socket buffer size with unit, or 'auto'. ex: '256K' (Default: auto)
 
     -t <time-in-scd>
     --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds (Default 30)
