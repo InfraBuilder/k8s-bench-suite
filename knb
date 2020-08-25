@@ -375,6 +375,8 @@ function compute-json-result {
 	echo "    \"socket-buffer-size\": \"$SOCKET_BUFFER_SIZE\""
 	echo "  },"
 	echo "  \"data\": {"
+	echo "    \"cpu\": $(cat $DATADIR/cpu),"
+	echo "    \"kernel\": $(cat $DATADIR/kernel),"
 	echo "    \"mtu\": $(cat $DATADIR/mtu),"
 	if [ "${IDLE_POD_NAME}" != "" ]
 	then
@@ -463,6 +465,8 @@ function compute-yaml-result {
 	echo "  client-node: \"$CLIENT_NODE\""
 	echo "  socket-buffer-size: \"$SOCKET_BUFFER_SIZE\""
 	echo "data:"
+	echo "  cpu: \"$(cat $DATADIR/cpu)\""
+	echo "  kernel: \"$(cat $DATADIR/kernel)\""
 	echo "  mtu: \"$(cat $DATADIR/mtu)\""
 	if [ "${IDLE_POD_NAME}" != "" ]
 	then
@@ -521,7 +525,9 @@ function compute-text-result {
 	echo " Client      : $CLIENT_NODE"
 	echo " Socket size : $SOCKET_BUFFER_SIZE"
 	echo "========================================================="
-	echo "  Discovered MTU : $(cat $DATADIR/mtu)"
+	echo "  Discovered CPU    : $(cat $DATADIR/cpu)"
+	echo "  Discovered Kernel : $(cat $DATADIR/kernel)"
+	echo "  Discovered MTU    : $(cat $DATADIR/mtu)"
 	if [ "${IDLE_POD_NAME}" != "" ]
 	then
 		echo "  Idle :"
@@ -1007,6 +1013,20 @@ CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
 	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| $BIN_AWK '{print $2}')
 $DEBUG && debug "CNI MTU is $CNI_MTU"
 echo $CNI_MTU > $DATADIR/mtu
+
+#--- CPU Detection ----------------------------------------
+
+info "Detecting CNI MTU"
+DISCOVERED_CPU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- grep "model name" /proc/cpuinfo | tail -n 1 | awk -F: '{print $2}')
+$DEBUG && debug "Cpu is $DISCOVERED_CPU"
+echo $DISCOVERED_CPU > $DATADIR/cpu
+
+#--- Kernel Detection ----------------------------------------
+
+info "Detecting CNI MTU"
+DISCOVERED_KERNEL=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- uname -r)
+$DEBUG && debug "Kernel is $DISCOVERED_KERNEL"
+echo $DISCOVERED_KERNEL > $DATADIR/kernel
 
 #--- Idle measurment  -------------------------------------
 
