@@ -1007,6 +1007,20 @@ $DEBUG && debug "Server IP address is $SERVER_IP"
 # Benchmark tests
 #==============================================================================
 
+#--- CPU Detection ----------------------------------------
+
+info "Detecting CPU"
+DISCOVERED_CPU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- grep "model name" /proc/cpuinfo | tail -n 1 | awk -F: '{print $2}')
+$DEBUG && debug "Cpu is $DISCOVERED_CPU"
+echo $DISCOVERED_CPU > $DATADIR/cpu
+
+#--- Kernel Detection ----------------------------------------
+
+info "Detecting Kernel"
+DISCOVERED_KERNEL=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- uname -r)
+$DEBUG && debug "Kernel is $DISCOVERED_KERNEL"
+echo $DISCOVERED_KERNEL > $DATADIR/kernel
+
 #--- MTU Detection ----------------------------------------
 
 info "Detecting CNI MTU"
@@ -1014,20 +1028,6 @@ CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
 	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| $BIN_AWK '{print $2}')
 $DEBUG && debug "CNI MTU is $CNI_MTU"
 echo $CNI_MTU > $DATADIR/mtu
-
-#--- CPU Detection ----------------------------------------
-
-info "Detecting CNI MTU"
-DISCOVERED_CPU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- grep "model name" /proc/cpuinfo | tail -n 1 | awk -F: '{print $2}')
-$DEBUG && debug "Cpu is $DISCOVERED_CPU"
-echo $DISCOVERED_CPU > $DATADIR/cpu
-
-#--- Kernel Detection ----------------------------------------
-
-info "Detecting CNI MTU"
-DISCOVERED_KERNEL=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- uname -r)
-$DEBUG && debug "Kernel is $DISCOVERED_KERNEL"
-echo $DISCOVERED_KERNEL > $DATADIR/kernel
 
 #--- Idle measurment  -------------------------------------
 
