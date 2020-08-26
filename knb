@@ -82,7 +82,7 @@ function waitpod {
 # Default config
 #==============================================================================
 
-VERSION=1.4.0
+VERSION=1.4.1
 GENERATOR="knb"
 BENCHMARK_DATE=$(date -u "+%Y-%m-%d %H:%M:%S")
 DEBUG=false
@@ -369,7 +369,6 @@ function compute-ibdbench-result {
 	compute-ibdbench-metrics $CLIENT_UDP_P2S_POD_NAME
 }
 
-
 function compute-json-result {
 	function compute-json-result-for-pod {
 		POD_NAME=$1
@@ -417,9 +416,10 @@ function compute-json-result {
 	echo "    \"socket-buffer-size\": \"$SOCKET_BUFFER_SIZE\""
 	echo "  },"
 	echo "  \"data\": {"
-	echo "    \"cpu\": $(cat $DATADIR/cpu),"
-	echo "    \"kernel\": $(cat $DATADIR/kernel),"
-	echo "    \"mtu\": $(cat $DATADIR/mtu),"
+	echo "    \"cpu\": \"$(cat $DATADIR/cpu)\","
+	echo "    \"kernel\": \"$(cat $DATADIR/kernel)\","
+	echo "    \"k8s-version\": \"$(cat $DATADIR/k8s-version)\","
+	echo "    \"mtu\": \"$(cat $DATADIR/mtu)\","
 	if [ "${IDLE_POD_NAME}" != "" ]
 	then
 		echo "    \"idle\": {"
@@ -509,6 +509,7 @@ function compute-yaml-result {
 	echo "data:"
 	echo "  cpu: \"$(cat $DATADIR/cpu)\""
 	echo "  kernel: \"$(cat $DATADIR/kernel)\""
+	echo "  k8s-version: \"$(cat $DATADIR/k8s-version)\""
 	echo "  mtu: \"$(cat $DATADIR/mtu)\""
 	if [ "${IDLE_POD_NAME}" != "" ]
 	then
@@ -559,17 +560,18 @@ function compute-text-result {
 	echo "========================================================="
 	echo " Benchmark Results"
 	echo "========================================================="
-	echo " Name        : $BENCHMARK_RUN_NAME"
-	echo " Date        : $BENCHMARK_DATE UTC"
-	echo " Generator   : $GENERATOR"
-	echo " Version     : $VERSION"
-	echo " Server      : $SERVER_NODE"
-	echo " Client      : $CLIENT_NODE"
-	echo " Socket size : $SOCKET_BUFFER_SIZE"
+	echo " Name            : $BENCHMARK_RUN_NAME"
+	echo " Date            : $BENCHMARK_DATE UTC"
+	echo " Generator       : $GENERATOR"
+	echo " Version         : $VERSION"
+	echo " Server          : $SERVER_NODE"
+	echo " Client          : $CLIENT_NODE"
+	echo " UDP Socket size : $SOCKET_BUFFER_SIZE"
 	echo "========================================================="
-	echo "  Discovered CPU    : $(cat $DATADIR/cpu)"
-	echo "  Discovered Kernel : $(cat $DATADIR/kernel)"
-	echo "  Discovered MTU    : $(cat $DATADIR/mtu)"
+	echo "  Discovered CPU         : $(cat $DATADIR/cpu)"
+	echo "  Discovered Kernel      : $(cat $DATADIR/kernel)"
+	echo "  Discovered k8s version : $(cat $DATADIR/k8s-version)"
+	echo "  Discovered MTU         : $(cat $DATADIR/mtu)"
 	if [ "${IDLE_POD_NAME}" != "" ]
 	then
 		echo "  Idle :"
@@ -913,6 +915,12 @@ MONITOR_CLIENT_POD_NAME="knb-monitor-client-$EXECID"
 SERVER_POD_NAME="knb-server-$EXECID"
 SERVER_SERVICE_NAME=$SERVER_POD_NAME
 
+IDLE_POD_NAME=""
+CLIENT_TCP_P2P_POD_NAME=""
+CLIENT_UDP_P2P_POD_NAME=""
+CLIENT_TCP_P2S_POD_NAME=""
+CLIENT_UDP_P2S_POD_NAME=""
+
 $RUN_TEST_IDLE && IDLE_POD_NAME="knb-client-idle-$EXECID"
 $RUN_TEST_P2P_TCP && CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
 $RUN_TEST_P2P_UDP && CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
@@ -933,6 +941,7 @@ SOCKET_BUFFER_SIZE="$SOCKET_BUFFER_SIZE"
 MONITOR_SERVER_POD_NAME="$MONITOR_SERVER_POD_NAME"
 MONITOR_CLIENT_POD_NAME="$MONITOR_CLIENT_POD_NAME"
 SERVER_POD_NAME="$SERVER_POD_NAME"
+
 IDLE_POD_NAME="$IDLE_POD_NAME"
 CLIENT_TCP_P2P_POD_NAME="$CLIENT_TCP_P2P_POD_NAME"
 CLIENT_UDP_P2P_POD_NAME="$CLIENT_UDP_P2P_POD_NAME"
@@ -1047,7 +1056,7 @@ SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_POD_NAME -o jsonpath={.status.
 $DEBUG && debug "Server IP address is $SERVER_IP"
 
 #==============================================================================
-# Benchmark tests
+# Data Detection
 #==============================================================================
 
 #--- CPU Detection ----------------------------------------
@@ -1057,12 +1066,20 @@ DISCOVERED_CPU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- grep "model
 $DEBUG && debug "Cpu is $DISCOVERED_CPU"
 echo $DISCOVERED_CPU > $DATADIR/cpu
 
-#--- Kernel Detection ----------------------------------------
+#--- Kernel Detection -------------------------------------
 
 info "Detecting Kernel"
 DISCOVERED_KERNEL=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- uname -r)
 $DEBUG && debug "Kernel is $DISCOVERED_KERNEL"
 echo $DISCOVERED_KERNEL > $DATADIR/kernel
+
+
+#--- K8S Version Detection --------------------------------
+
+info "Detecting Kernel"
+DISCOVERED_K8S_VERSION=$(kubectl version --short | awk '$1=="Server" {print $3}' )
+$DEBUG && debug "Discovered k8s version is $DISCOVERED_K8S_VERSION"
+echo $DISCOVERED_K8S_VERSION > $DATADIR/k8s-version
 
 #--- MTU Detection ----------------------------------------
 
@@ -1071,6 +1088,10 @@ CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
 	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| $BIN_AWK '{print $2}')
 $DEBUG && debug "CNI MTU is $CNI_MTU"
 echo $CNI_MTU > $DATADIR/mtu
+
+#==============================================================================
+# Benchmark tests
+#==============================================================================
 
 #--- Idle measurment  -------------------------------------
 
