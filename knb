@@ -1076,7 +1076,7 @@ echo $DISCOVERED_KERNEL > $DATADIR/kernel
 
 #--- K8S Version Detection --------------------------------
 
-info "Detecting Kernel"
+info "Detecting Kubernetes version"
 DISCOVERED_K8S_VERSION=$(kubectl version --short | awk '$1=="Server" {print $3}' )
 $DEBUG && debug "Discovered k8s version is $DISCOVERED_K8S_VERSION"
 echo $DISCOVERED_K8S_VERSION > $DATADIR/k8s-version
