@@ -36,7 +36,7 @@ Binaries dependencies for the host that will execute [knb](knb) :
 Choose two nodes to act as server/client on your cluster (for example node1 and node2) . Then start the knb : 
 
 ```bash
-./knb --verbose -client-node node1 -server-node node2
+./knb --verbose --client-node node1 --server-node node2
 ```
 
 If you omit the `--verbose` flag, it will also complete, but you will have no output until the end of the benchmark.
