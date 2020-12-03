@@ -302,7 +302,7 @@ function run-client {
 
 	# Extracting monitoring
 	$DEBUG && debug "Writing $POD_NAME server metrics to $DATADIR/$POD_NAME-server.metrics"
-	kubectl exec -it $NAMESPACEOPT $MONITOR_SERVER_POD_NAME \
+	kubectl exec -i $NAMESPACEOPT $MONITOR_SERVER_POD_NAME \
 		-- sh /stats.sh $STARTTIME $ENDTIME > $DATADIR/$POD_NAME-server.metrics
 
 	$DEBUG && debug "Computing $POD_NAME server metrics average to $DATADIR/$POD_NAME-server.avg"
@@ -314,7 +314,7 @@ function run-client {
 		}' > $DATADIR/$POD_NAME-server.avg
 
 	$DEBUG && debug "Writing $POD_NAME client metrics to $DATADIR/$POD_NAME-client.metrics"
-	kubectl exec -it $NAMESPACEOPT $MONITOR_CLIENT_POD_NAME \
+	kubectl exec -i $NAMESPACEOPT $MONITOR_CLIENT_POD_NAME \
 		-- sh /stats.sh $STARTTIME $ENDTIME > $DATADIR/$POD_NAME-client.metrics
 
 	$DEBUG && debug "Computing $POD_NAME client metrics average to $DATADIR/$POD_NAME-client.avg"
@@ -1062,14 +1062,14 @@ $DEBUG && debug "Server IP address is $SERVER_IP"
 #--- CPU Detection ----------------------------------------
 
 info "Detecting CPU"
-DISCOVERED_CPU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- grep "model name" /proc/cpuinfo | tail -n 1 | awk -F: '{print $2}')
+DISCOVERED_CPU=$(kubectl exec -i  $NAMESPACEOPT $SERVER_POD_NAME -- grep "model name" /proc/cpuinfo | tail -n 1 | awk -F: '{print $2}')
 $DEBUG && debug "Cpu is $DISCOVERED_CPU"
 echo $DISCOVERED_CPU > $DATADIR/cpu
 
 #--- Kernel Detection -------------------------------------
 
 info "Detecting Kernel"
-DISCOVERED_KERNEL=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- uname -r)
+DISCOVERED_KERNEL=$(kubectl exec -i  $NAMESPACEOPT $SERVER_POD_NAME -- uname -r)
 $DEBUG && debug "Kernel is $DISCOVERED_KERNEL"
 echo $DISCOVERED_KERNEL > $DATADIR/kernel
 
@@ -1084,7 +1084,7 @@ echo $DISCOVERED_K8S_VERSION > $DATADIR/k8s-version
 #--- MTU Detection ----------------------------------------
 
 info "Detecting CNI MTU"
-CNI_MTU=$(kubectl exec -it  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
+CNI_MTU=$(kubectl exec -i  $NAMESPACEOPT $SERVER_POD_NAME -- ip link \
 	| grep "UP,LOWER_UP" | grep -v LOOPBACK | grep -oE "mtu [0-9]*"| $BIN_AWK '{print $2}')
 $DEBUG && debug "CNI MTU is $CNI_MTU"
 echo $CNI_MTU > $DATADIR/mtu
