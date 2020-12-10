@@ -412,7 +412,7 @@ function compute-json-result {
 	echo "    \"version\": \"$VERSION\","
 	echo "    \"date\": \"$BENCHMARK_DATE\","
 	echo "    \"server-node\": \"$SERVER_NODE\","
-	echo "    \"client-node\": \"$CLIENT_NODE\""
+	echo "    \"client-node\": \"$CLIENT_NODE\"",
 	echo "    \"socket-buffer-size\": \"$SOCKET_BUFFER_SIZE\""
 	echo "  },"
 	echo "  \"data\": {"
