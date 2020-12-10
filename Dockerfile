@@ -6,6 +6,6 @@ RUN apt-get update &&\
     DEBIAN_FRONTEND=noninteractive apt-get install -y ncurses-bin && \
     rm -r /var/lib/apt/lists /var/cache/apt/archives
 COPY knb /usr/bin
-COPY starter.sh /usr/bin
-ENTRYPOINT ["/usr/bin/starter.sh"]
+COPY docker-entrypoint.sh /usr/bin
+ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
 USER 1001
