@@ -889,7 +889,7 @@ do
 			PLOT_DIR=$1
 			info "Plot directory set to ${PLOT_DIR}"
 			;;
-		# Directory where to save graphs:
+		# Arguments for 'orca graph':
 		--plot-args|-pa)
 			shift
 			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"

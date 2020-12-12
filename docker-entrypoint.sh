@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash
 
 # NODE_AUTOSELECT=1 pre-selects a few worker nodes and
 # provides them to knb as --client/server-node arguments
@@ -23,6 +23,7 @@ then
   fi
   test_nodes=($worker_nodes)
   node_args="--client-node ${test_nodes[0]} --server-node ${test_nodes[1]}"
+  echo "Pre-selected nodes for tests: $node_args"
 fi
 
-knb "$@" $node_args
+/knb "$@" $node_args

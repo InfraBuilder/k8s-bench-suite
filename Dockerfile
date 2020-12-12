@@ -6,8 +6,8 @@ RUN apt-get update &&\
     DEBIAN_FRONTEND=noninteractive apt-get install -y jq ncurses-bin && \
     rm -r /var/lib/apt/lists /var/cache/apt/archives
 
-COPY knb /usr/bin
-COPY docker-entrypoint.sh /usr/bin
+COPY knb /
+COPY docker-entrypoint.sh /
+COPY plotly-templates /plotly-templates
 
-ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
-USER 1001
+ENTRYPOINT ["/docker-entrypoint.sh"]
