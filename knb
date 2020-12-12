@@ -241,6 +241,11 @@ function usage {
 	  | knb -fd mybench.knbdata -o json                                       |
 	  -------------------------------------------------------------------------
 
+	  Create graph images from previous benchmark file "mybench.knbdata"
+	  -------------------------------------------------------------------------
+	  | knb -fd mybench.knbdata  --plot --plot-dir ./my-graphs                |
+	  -------------------------------------------------------------------------
+
 	  Run only idle and tcp benchmark :
 	  -------------------------------------------------------------------------
 	  | knb -cn clientnode -sn servernode -ot idle,tcp                        |
@@ -370,6 +375,7 @@ function plot-data {
 	[ -x "$(which jq)" ] || fatal "jq is required for rendering json data for plots"
 	info "Plotting data ..."
 	initialize-plotly-pod $PLOT_POD_NAME
+	[ ! -d "$PLOT_DIR" ] && mkdir $PLOT_DIR
 	for tmpl in $(dirname $0)/plotly-templates/*
 	do
 		$DEBUG && debug "Rendering graph from $tmpl"
