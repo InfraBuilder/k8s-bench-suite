@@ -43,7 +43,7 @@ function debug { [ $DEBUG_LEVEL -ge 3 ] && echo "$(logdate) $(color lightcyan)[D
 function now { date +%s; }
 function cleanandexit {
 	# Cleaning Kubernetes resources
-	for i in $RESSOURCE_TO_CLEAN_BEFORE_EXIT
+	for i in $RESOURCE_TO_CLEAN_BEFORE_EXIT
 	do
 		$DEBUG && debug "Deleting resource $i"
 		kubectl delete $NAMESPACEOPT $i --wait=false >/dev/null
@@ -82,7 +82,7 @@ function waitpod {
 # Default config
 #==============================================================================
 
-VERSION=1.4.1
+VERSION=1.5.0
 GENERATOR="knb"
 BENCHMARK_DATE=$(date -u "+%Y-%m-%d %H:%M:%S")
 DEBUG=false
@@ -95,9 +95,13 @@ NAMESPACEOPT=""
 POD_WAIT_TIMEOUT="30"
 BENCHMARK_DURATION="10"
 SOCKET_BUFFER_SIZE="auto"
-RESSOURCE_TO_CLEAN_BEFORE_EXIT=""
+RESOURCE_TO_CLEAN_BEFORE_EXIT=""
 OUTPUT_FORMAT="text"
 FILENAME="/dev/stdout"
+PLOT_DIR="$(pwd)"
+PLOT_DATA=false
+PLOT_POD_NAME="knb-plotly-orca-$EXECID"
+PLOT_GRAPH_ARGS="--width 900 --height 500"
 CLEANDIR="true"
 FROM_DATA="false"
 
@@ -200,6 +204,17 @@ function usage {
 	    -h
 	    --help                      : Display this help message
 
+	    -p
+	    --plot                      : Plot data using plotly/orca
+
+	    -pd
+	    --plot-dir                  : Directory where to save graphs
+	                                  Defaults to the current directory
+
+	    -pa
+	    --plot-args                 : Arguments to the plotly's 'orca graph' function
+	                                  Defaults to '--width 900 --height 500'
+
 	    -o <format>
 	    --output <format>           : Set the output format
 	                                  Possible values: text, yaml, json, data, ibdbench
@@ -275,7 +290,7 @@ function run-client {
 	  restartPolicy: Never
 	EOF
 
-	RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$POD_NAME"
+	RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$POD_NAME"
 
 	# Waiting for Pod to be Running
 	kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$POD_NAME \
@@ -323,6 +338,45 @@ function run-client {
 			print "cpu-user cpu-nice cpu-system cpu-iowait cpu-steal memory-used records-number";
 			printf "%.2f %.2f %.2f %.2f %.2f %d %d\n",U/NR,N/NR,S/NR,I/NR,T/NR,M/NR,NR
 		}' > $DATADIR/$POD_NAME-client.avg
+}
+
+function initialize-plotly-pod {
+	POD_NAME=$1
+
+	info "Starting plotly-orca pod $POD_NAME"
+	cat <<-EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create pod $POD_NAME"
+	apiVersion: v1
+	kind: Pod
+	metadata:
+	  labels:
+	    app: $POD_NAME
+	  name: $POD_NAME
+	spec:
+	  containers:
+	  - name: plotly-orca
+	    image: quay.io/plotly/orca
+	  restartPolicy: Never
+	EOF
+
+	RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$POD_NAME"
+
+	# Waiting for Pod to be Running
+	kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$POD_NAME \
+		--timeout=$((POD_WAIT_TIMEOUT + 120))s >/dev/null 2>/dev/null \
+		|| detect-pod-failure-reason-and-fatal $POD_NAME "Failed to start pod $POD_NAME until timeout"
+}
+
+function plot-data {
+	[ -x "$(which jq)" ] || fatal "jq is required for rendering json data for plots"
+	info "Plotting data ..."
+	initialize-plotly-pod $PLOT_POD_NAME
+	for tmpl in $(dirname $0)/plotly-templates/*
+	do
+		$DEBUG && debug "Rendering graph from $tmpl"
+		compute-json-result | jq -M -f $tmpl |\
+		kubectl exec -i $NAMESPACEOPT $PLOT_POD_NAME -- orca graph \
+		"$PLOT_GRAPH_ARGS" > ${PLOT_DIR}/"$(basename $tmpl .jq).png"
+	done
 }
 
 function compute-data-result {
@@ -824,6 +878,24 @@ do
 			usage && exit
 			;;
 
+		# Plot data with plotly/orca
+		--plot|-p)
+			PLOT_DATA=true
+			;;
+		# Directory where to save graphs:
+		--plot-dir|-pd)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			PLOT_DIR=$1
+			info "Plot directory set to ${PLOT_DIR}"
+			;;
+		# Directory where to save graphs:
+		--plot-args|-pa)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			PLOT_GRAPH_ARGS=$1
+			info "Plot orca graph arguments are set to ${PLOT_GRAPH_ARGS}"
+			;;
 		# Set the output format
 		--output|-o)
 			shift
@@ -902,6 +974,7 @@ then
 
 		source-data-from-dir
 		generate-report
+		$PLOT_DATA && plot-data
 
 	else
 		fatal "Cannot recognize data format $DATADIR"
@@ -992,7 +1065,7 @@ spec:
     kubernetes.io/hostname: $SERVER_NODE
 EOF
 
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_SERVER_POD_NAME"
+RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_SERVER_POD_NAME"
 
 info "Waiting for server monitor to be running"
 waitpod $MONITOR_SERVER_POD_NAME Running $POD_WAIT_TIMEOUT \
@@ -1015,7 +1088,7 @@ spec:
     kubernetes.io/hostname: $CLIENT_NODE
 EOF
 
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_CLIENT_POD_NAME"
+RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$MONITOR_CLIENT_POD_NAME"
 
 info "Waiting for client monitor to be running"
 waitpod $MONITOR_CLIENT_POD_NAME Running $POD_WAIT_TIMEOUT \
@@ -1061,7 +1134,7 @@ spec:
       name: udp
 EOF
 
-RESSOURCE_TO_CLEAN_BEFORE_EXIT="$RESSOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME svc/$SERVER_SERVICE_NAME"
+RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME svc/$SERVER_SERVICE_NAME"
 
 info "Waiting for server to be running"
 kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$SERVER_POD_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
@@ -1154,6 +1227,7 @@ fi
 #==============================================================================
 
 generate-report
+$PLOT_DATA && plot-data
 
 #==============================================================================
 # Cleaning

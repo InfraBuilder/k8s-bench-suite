@@ -1,22 +1,21 @@
 #!/bin/bash -x
 
-# This is a helper script which pre-selects a few worker nodes and
-# provides them to knb as --client/server-node arguments if
-# NODE_AUTOSELECT variable is set
+# NODE_AUTOSELECT=1 pre-selects a few worker nodes and
+# provides them to knb as --client/server-node arguments
 #
-# In order to choose from manager nodes as well, MASTER_ELIGABLE
-# variable should be also set.
+# MASTER_ELIGIBLE=1 choose from manager nodes as well
+#
 
 node_args=
-master_eligable="!"
+master_eligible="!"
 
 if [[ -n $NODE_AUTOSELECT ]]
 then
-  if [[ -n $MASTER_ELIGABLE ]]
+  if [[ -n $MASTER_ELIGIBLE ]]
   then
-    master_eligable=
+    master_eligible=
   fi
-  worker_nodes=$(kubectl get nodes -l "$master_eligable node-role.kubernetes.io/master" -o name|awk -F '/' '{print $2}')
+  worker_nodes=$(kubectl get nodes -l "$master_eligible node-role.kubernetes.io/master" -o name|awk -F '/' '{print $2}')
   if [[ -z $worker_nodes ]]
   then
     echo "No available nodes found for scheduling"
@@ -26,4 +25,4 @@ then
   node_args="--client-node ${test_nodes[0]} --server-node ${test_nodes[1]}"
 fi
 
-knb $node_args "$@"
+knb "$@" $node_args
