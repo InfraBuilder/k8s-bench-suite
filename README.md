@@ -13,7 +13,7 @@ Here are some highlights:
 - Testing **both TCP and UDP** bandwidth
 - **Automatic detection of CNI MTU**
 - **Includes host cpu and ram monitoring** in benchmark report
-- Ability to create static graph images based on result data (with plotly/orca)
+- Ability to create static graph images based on the result data using plotly/orca (see examples below)
 - No ssh access required, just an access to the target cluster through **standard kubectl**
 - **No need for high privileges**, the script will just launch very lightweight pods on two nodes.
 - Based on **very lights containers** images :
@@ -56,7 +56,7 @@ If you omit the `--verbose` flag, it will also complete, but you will have no ou
 You need to mount a valid kubeconfig inside the container and provide all other required flags to knb:
 
 ```bash
-docker run -e NODE_AUTOSELECT=1 -it --hostname knb --name knb --rm -v ./my-graphs:/my-graphs -v /path/to/my/kubeconfig:/.kube/config olegeech/k8s-bench-suite --verbose --plot --plot-dir /my-graphs
+docker run -e NODE_AUTOSELECT=1 -it --hostname knb --name knb --rm -v /home/user/my-graphs:/my-graphs -v /path/to/my/kubeconfig:/.kube/config olegeech/k8s-bench-suite --verbose --plot --plot-dir /my-graphs
 ```
 
 ### Examples
@@ -220,5 +220,11 @@ Mandatory flags :
   -------------------------------------------------------------------------
   | knb -cn clientnode -sn servernode -ot idle,tcp                        |
   -------------------------------------------------------------------------
+
 ```
+### Graph examples
+
+![bandwidth](https://user-images.githubusercontent.com/21361354/102022246-d6e1d080-3d85-11eb-8ca6-37064ac3918f.png)
+![cpu-usage](https://user-images.githubusercontent.com/21361354/102022247-d812fd80-3d85-11eb-820f-f5108cf8b930.png)
+![ram-usage](https://user-images.githubusercontent.com/21361354/102022250-d812fd80-3d85-11eb-9f1b-650571bb0054.png)
 
