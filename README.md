@@ -13,11 +13,15 @@ Here are some highlights:
 - Testing **both TCP and UDP** bandwidth
 - **Automatic detection of CNI MTU**
 - **Includes host cpu and ram monitoring** in benchmark report
+- Ability to create static graph images based on the result data using plotly/orca (see examples below)
 - No ssh access required, just an access to the target cluster through **standard kubectl**
 - **No need for high privileges**, the script will just launch very lightweight pods on two nodes.
 - Based on **very lights containers** images :
   - ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/infrabuilder/bench-iperf3/latest) [infrabuilder/bench-iperf3](https://hub.docker.com/r/infrabuilder/bench-iperf3), is used to run benchmark tests
   - ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/infrabuilder/bench-custom-monitor/latest) [infrabuilder/bench-custom-monitor](https://hub.docker.com/r/infrabuilder/bench-custom-monitor), is used to monitor nodes
+- **Ability to run the whole suite in a container** [olegeech/k8s-bench-suite](https://hub.docker.com/r/olegeech/k8s-bench-suite):
+  - Image is based on the bitnami/kubectl
+  - Nodes for testing can be auto-preselected
 
 ### Requirements 
 
@@ -30,6 +34,7 @@ Binaries dependencies for the host that will execute [knb](knb) :
 - tail
 - date
 - kubectl
+- jq (for plotting)
 
 ### Quickstart
 
@@ -40,6 +45,19 @@ Choose two nodes to act as server/client on your cluster (for example node1 and 
 ```
 
 If you omit the `--verbose` flag, it will also complete, but you will have no output until the end of the benchmark.
+
+### Docker quickstart
+
+**Environment variables:**
+
+- `NODE_AUTOSELECT` Auto-selects a few nodes from cluster for running tests
+- `MASTER_ELIGIBLE` Master nodes can also be chosen
+
+You need to mount a valid kubeconfig inside the container and provide all other required flags to knb:
+
+```bash
+docker run -e NODE_AUTOSELECT=1 -it --hostname knb --name knb --rm -v /home/user/my-graphs:/my-graphs -v /path/to/my/kubeconfig:/.kube/config olegeech/k8s-bench-suite --verbose --plot --plot-dir /my-graphs
+```
 
 ### Examples
 
@@ -59,6 +77,12 @@ If you omit the `--verbose` flag, it will also complete, but you will have no ou
 
   ```bash
   knb -fd mybench.knbdata -o json
+  ```
+
+- Plot graphs from **previous benchmark** data file `mybench.knbdata`
+
+  ```bash
+  knb -fd mybench.knbdata --plot --plot-args '--width 900 --height 600'
   ```
 
 - To run benchmark from node A to node B, showing only result **in yaml** format : 
@@ -150,6 +174,17 @@ Mandatory flags :
     -h
     --help                      : Display this help message
 
+    -p
+    --plot                      : Plot data using plotly/orca
+
+    -pd
+    --plot-dir                  : Directory where to save graphs
+                                  Defaults to the current directory
+
+    -pa
+    --plot-args                 : Arguments to the plotly's 'orca graph' function
+                                  Defaults to '--width 900 --height 500'
+
     -o <format>
     --output <format>           : Set the output format
                                   Possible values: text, yaml, json, data
@@ -176,9 +211,20 @@ Mandatory flags :
   | knb -fd mybench.knbdata -o json                                       |
   -------------------------------------------------------------------------
 
+  Create graph images from previous benchmark file "mybench.knbdata"
+  -------------------------------------------------------------------------
+  | knb -fd mybench.knbdata  --plot --plot-dir ./my-graphs                |
+  -------------------------------------------------------------------------
+
   Run only idle and tcp benchmark :
   -------------------------------------------------------------------------
   | knb -cn clientnode -sn servernode -ot idle,tcp                        |
   -------------------------------------------------------------------------
+
 ```
+### Graph examples
+
+![bandwidth](https://user-images.githubusercontent.com/21361354/102022246-d6e1d080-3d85-11eb-8ca6-37064ac3918f.png)
+![cpu-usage](https://user-images.githubusercontent.com/21361354/102022247-d812fd80-3d85-11eb-820f-f5108cf8b930.png)
+![ram-usage](https://user-images.githubusercontent.com/21361354/102022250-d812fd80-3d85-11eb-9f1b-650571bb0054.png)
 
