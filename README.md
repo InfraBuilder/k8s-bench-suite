@@ -159,6 +159,7 @@ There are two modes :
 Mandatory flags :
     -fd <path>
     --from-data <path>          : Define the path to the data to read from
+                                  Data file must be rendered with '--output data'
 
 =====[ Common optionnal flags ]============================================
 
@@ -186,7 +187,7 @@ Mandatory flags :
                                   Defaults to '--width 900 --height 500'
 
     -o <format>
-    --output <format>           : Set the output format
+    --output <format>           : Set the output format. Defaults to 'text'
                                   Possible values: text, yaml, json, data
     -v
     --verbose                   : Activate the verbose mode by setting debug-level to 'info'
