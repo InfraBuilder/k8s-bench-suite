@@ -111,6 +111,9 @@ RUN_TEST_P2P_UDP="true"
 RUN_TEST_P2S_TCP="true"
 RUN_TEST_P2S_UDP="true"
 
+MULTI="01"
+PARALLEL="1"
+
 export LC_ALL=C # Trick to no depend on locale
 BIN_AWK="awk"
 
@@ -183,6 +186,12 @@ function usage {
 
 	    -t <time-in-scd>
 	    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds (Default ${POD_WAIT_TIMEOUT})
+
+	    -p <parallel>
+	    --parallel <parallel>       : Set number of parallel connections to iperf3 server.(Default 1)
+
+	    -m <multi>
+	    --multi <multi>             : Run multiple instances of iperf3.(Default 1, Maximum 99)
 
 	=====[ From Data mode ]====================================================
 
@@ -267,11 +276,19 @@ function run-client {
 		SOCKET_BUFFER_FLAG="-w $SOCKET_BUFFER_SIZE"
 	fi
 
+	TCP_COMMAND=""
+	UDP_COMMAND=""
+	for i in $(seq -f "%02g" $MULTI)
+	do
+		UDP_COMMAND="$UDP_COMMAND iperf3 -b 0 -c $TARGET -p 52$i -u -P $PARALLEL -O 1 $SOCKET_BUFFER_FLAG -f m -t $BENCHMARK_DURATION & "
+		TCP_COMMAND="$TCP_COMMAND iperf3 -c $TARGET -p 52$i -P $PARALLEL -O 1 -f m -t $BENCHMARK_DURATION & "
+	done
+
 	CMD=""
 	case $3 in
 		idle) CMD="sleep $BENCHMARK_DURATION; echo 0 0 0 0 0 0 0 receiver" ;;
-		udp) CMD="iperf3 -u -b 0 -c $TARGET -O 1 $SOCKET_BUFFER_FLAG -f m -t $BENCHMARK_DURATION" ;;
-		tcp) CMD="iperf3 -c $TARGET -O 1 -f m -t $BENCHMARK_DURATION" ;;
+		udp) CMD="$UDP_COMMAND wait" ;;
+		tcp) CMD="$TCP_COMMAND wait" ;;
 		*) fatal "Unknown benchmark type '$2'" ;;
 	esac
 
@@ -318,7 +335,11 @@ function run-client {
 	# Extracting data
 	$DEBUG && debug "Writing $POD_NAME logs to $DATADIR/$POD_NAME.log"
 	kubectl logs $NAMESPACEOPT $POD_NAME > $DATADIR/$POD_NAME.log
-	grep receiver $DATADIR/$POD_NAME.log | $BIN_AWK '{print $7}' > $DATADIR/$POD_NAME.bw
+	if [[ "$PARALLEL" == "1" ]]; then
+		grep receiver $DATADIR/$POD_NAME.log | $BIN_AWK '{s+=$7} END {print s}' > $DATADIR/$POD_NAME.bw
+	else
+		grep receiver $DATADIR/$POD_NAME.log | grep SUM | $BIN_AWK '{s+=$6} END {print s}' > $DATADIR/$POD_NAME.bw
+	fi
 	$DEBUG && debug "$POD_NAME Bandwidth = $(cat $DATADIR/$POD_NAME.bw)"
 
 	# Extracting monitoring
@@ -838,6 +859,26 @@ do
 			info "Setting pod wait timeout to ${1}s"
 			;;
 
+		# Set how many instances of iperf3 should used for this benchmark
+		--multi|-m)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			if [ $1 -gt 99 ];then
+				MULTI="99"
+			else
+				MULTI="$(printf "%02d" $1)"
+			fi
+			info "Running a benchmark with $MULTI instance/s of iperf3."
+			;;
+
+		# Set how many parallel of iperf3 should used for this benchmark
+		--parallel|-p)
+			shift
+			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
+			PARALLEL="$1"
+			info "Running a benchmark with ${1} parallel connection/s to iperf3 server."
+			;;
+
 		#--- From Data - Mandatory flags --------------------------------------
 
 		# Define the path to the data to read from
@@ -1104,6 +1145,20 @@ waitpod $MONITOR_CLIENT_POD_NAME Running $POD_WAIT_TIMEOUT \
 #==============================================================================
 # Starting server
 #==============================================================================
+SERVER_PORTS=""
+SERVER_PROCESS=""
+
+for i in $(seq -f "%02g" $MULTI)
+do
+	SERVER_PORTS="$SERVER_PORTS{'protocol': 'TCP', 'port': 52$i, 'targetPort': 52$i, 'name': 'tcp$i'},{'protocol': 'UDP', 'port': 52$i, 'targetPort': 52$i, 'name': 'udp$i'}"
+	if [[ "$i" != "$MULTI" ]]; then
+		SERVER_PORTS="$SERVER_PORTS,"
+		SERVER_PROCESS="$SERVER_PROCESS iperf3 -s -D -p 52$i;"
+	else
+		SERVER_PROCESS="$SERVER_PROCESS iperf3 -s -p 52$i"
+	fi
+done
+
 
 info "Deploying iperf server on node $SERVER_NODE"
 cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create server pod"
@@ -1117,9 +1172,8 @@ spec:
   containers:
   - name: iperf
     image: infrabuilder/netbench:server-iperf3
-    args:
-    - iperf3
-    - -s
+    command: ["/bin/bash", "-c"]
+    args: ["$SERVER_PROCESS"]
   nodeSelector:
     kubernetes.io/hostname: $SERVER_NODE
 ---
@@ -1130,15 +1184,7 @@ metadata:
 spec:
   selector:
     app: $SERVER_POD_NAME
-  ports:
-    - protocol: TCP
-      port: 5201
-      targetPort: 5201
-      name: tcp
-    - protocol: UDP
-      port: 5201
-      targetPort: 5201
-      name: udp
+  ports: [$SERVER_PORTS]
 EOF
 
 RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_POD_NAME svc/$SERVER_SERVICE_NAME"
