@@ -187,7 +187,7 @@ function usage {
 	    -t <time-in-scd>
 	    --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds (Default ${POD_WAIT_TIMEOUT})
 
-	    -p <parallel>
+	    -P <parallel>
 	    --parallel <parallel>       : Set number of parallel connections to iperf3 server.(Default 1)
 
 	    -m <multi>
@@ -872,7 +872,7 @@ do
 			;;
 
 		# Set how many parallel of iperf3 should used for this benchmark
-		--parallel|-p)
+		--parallel|-P)
 			shift
 			[ "$1" = "" ] && fatal "$arg flag must be followed by a value"
 			PARALLEL="$1"

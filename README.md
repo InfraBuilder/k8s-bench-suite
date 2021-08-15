@@ -154,7 +154,7 @@ There are two modes :
     -t <time-in-scd>
     --timeout <time-in-scd>     : Set the pod ready wait timeout in seconds (Default 30)
 
-    -p <parallel>
+    -P <parallel>
     --parallel <parallel>       : Set number of parallel connections to iperf3 server.(Default 1)
 
     -m <multi>
