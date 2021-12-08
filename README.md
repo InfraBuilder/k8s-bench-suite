@@ -1,4 +1,5 @@
 # k8s-bench-suite
+
 Bash scripts collection to benchmark kubernetes cluster performance
 
 ## [knb](knb) : Kubernetes Network Benchmark
@@ -23,7 +24,7 @@ Here are some highlights:
   - Image is based on the bitnami/kubectl
   - Nodes for testing can be auto-preselected
 
-### Requirements 
+### Requirements
 
 This script needs a valid `kubectl` setup with an access to the target cluster.
 
@@ -38,7 +39,7 @@ Binaries dependencies for the host that will execute [knb](knb) :
 
 ### Quickstart
 
-Choose two nodes to act as server/client on your cluster (for example node1 and node2) . Then start the knb : 
+Choose two nodes to act as server/client on your cluster (for example node1 and node2) . Then start the knb :
 
 ```bash
 ./knb --verbose --client-node node1 --server-node node2
@@ -67,9 +68,9 @@ docker run -e NODE_AUTOSELECT=1 -it --hostname knb --name knb --rm -v /home/user
   knb -v -cn node1 -sn node2
   ```
 
-- Benchmark from "nA" to "nB" and **save data** in file `mybench.knbdata` 
+- Benchmark from "nA" to "nB" and **save data** in file `mybench.knbdata`
 
-  ```bash 
+  ```bash
   knb -cn nA -sn nB -o data -f mybench.knbdata
   ```
 
@@ -85,7 +86,7 @@ docker run -e NODE_AUTOSELECT=1 -it --hostname knb --name knb --rm -v /home/user
   knb -fd mybench.knbdata --plot --plot-args '--width 900 --height 600'
   ```
 
-- To run benchmark from node A to node B, showing only result **in yaml** format : 
+- To run benchmark from node A to node B, showing only result **in yaml** format :
 
   ```bash
   knb -cn A -sn B -o yaml
@@ -223,9 +224,22 @@ Mandatory flags :
   -------------------------------------------------------------------------
 
 ```
+
 ### Graph examples
 
 ![bandwidth](https://user-images.githubusercontent.com/21361354/102022246-d6e1d080-3d85-11eb-8ca6-37064ac3918f.png)
 ![cpu-usage](https://user-images.githubusercontent.com/21361354/102022247-d812fd80-3d85-11eb-820f-f5108cf8b930.png)
 ![ram-usage](https://user-images.githubusercontent.com/21361354/102022250-d812fd80-3d85-11eb-9f1b-650571bb0054.png)
 
+### Customize images
+
+You can use your own images by exporting variables below pointing to your own images, or by adding corresponding
+`VAR="value"` to `.env` file inside directory, which will be sourced when knb is run:
+
+```bash
+export IMAGE_BENCH_IPERF3="infrabuilder/bench-iperf3"
+export IMAGE_BENCH_MONITOR="infrabuilder/bench-custom-monitor"
+export IMAGE_NETBENCH="infrabuilder/netbench:server-iperf3"
+export IMAGE_PLOTLY_ORCA="quay.io/plotly/orca"
+knb <options>
+```

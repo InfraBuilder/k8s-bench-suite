@@ -105,6 +105,13 @@ PLOT_GRAPH_ARGS="--width 900 --height 500"
 CLEANDIR="true"
 FROM_DATA="false"
 
+# Allow override images with .env file or via setting environment variables
+[ -f .env ] && source .env
+: "${IMAGE_BENCH_IPERF3:="infrabuilder/bench-iperf3"}
+: "${IMAGE_BENCH_MONITOR:="infrabuilder/bench-custom-monitor"}
+: "${IMAGE_NETBENCH:="infrabuilder/netbench:server-iperf3"}
+: "${IMAGE_PLOTLY_ORCA:="quay.io/plotly/orca"}
+
 RUN_TEST_IDLE="true"
 RUN_TEST_P2P_TCP="true"
 RUN_TEST_P2P_UDP="true"
@@ -286,7 +293,7 @@ function run-client {
 	spec:
 	  containers:
 	  - name: iperf
-	    image: infrabuilder/bench-iperf3
+	    image: $IMAGE_BENCH_IPERF3
 	    args:
 	    - /bin/sh
 	    - -c
@@ -360,7 +367,7 @@ function initialize-plotly-pod {
 	spec:
 	  containers:
 	  - name: plotly-orca
-	    image: quay.io/plotly/orca
+	    image: $IMAGE_PLOTLY_ORCA
 	  restartPolicy: Never
 	EOF
 
@@ -1067,7 +1074,7 @@ metadata:
 spec:
   containers:
   - name: monitor
-    image: infrabuilder/bench-custom-monitor
+    image: $IMAGE_BENCH_MONITOR
   nodeSelector:
     kubernetes.io/hostname: $SERVER_NODE
 EOF
@@ -1090,7 +1097,7 @@ metadata:
 spec:
   containers:
   - name: monitor
-    image: infrabuilder/bench-custom-monitor
+    image: $IMAGE_BENCH_MONITOR
   nodeSelector:
     kubernetes.io/hostname: $CLIENT_NODE
 EOF
@@ -1116,7 +1123,7 @@ metadata:
 spec:
   containers:
   - name: iperf
-    image: infrabuilder/netbench:server-iperf3
+    image: $IMAGE_NETBENCH
     args:
     - iperf3
     - -s
