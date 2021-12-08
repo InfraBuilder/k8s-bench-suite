@@ -368,6 +368,11 @@ function initialize-plotly-pod {
 	  containers:
 	  - name: plotly-orca
 	    image: $IMAGE_PLOTLY_ORCA
+	    env:
+	    - name: HTTP_PROXY
+	      value: $HTTP_PROXY
+	    - name: HTTPS_PROXY
+	      value: $HTTPS_PROXY
 	  restartPolicy: Never
 	EOF
 

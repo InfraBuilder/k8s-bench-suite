@@ -231,7 +231,7 @@ Mandatory flags :
 ![cpu-usage](https://user-images.githubusercontent.com/21361354/102022247-d812fd80-3d85-11eb-820f-f5108cf8b930.png)
 ![ram-usage](https://user-images.githubusercontent.com/21361354/102022250-d812fd80-3d85-11eb-9f1b-650571bb0054.png)
 
-### Customize images
+### Customize images and proxy
 
 You can use your own images by exporting variables below pointing to your own images, or by adding corresponding
 `VAR="value"` to `.env` file inside directory, which will be sourced when knb is run:
@@ -241,5 +241,14 @@ export IMAGE_BENCH_IPERF3="infrabuilder/bench-iperf3"
 export IMAGE_BENCH_MONITOR="infrabuilder/bench-custom-monitor"
 export IMAGE_NETBENCH="infrabuilder/netbench:server-iperf3"
 export IMAGE_PLOTLY_ORCA="quay.io/plotly/orca"
+knb <options>
+```
+
+You may use `HTTP_PROXY` and `HTTPS_PROXY` in the same way as `IMAGE_*` variables above to inject proxy settings
+to the Orca container if you are running cluster behind a corporate proxy.
+
+```bash
+export HTTP_PROXY="http://proxy.example.com:3128"
+export HTTPS_PROXY="http://proxy.example.com:3128"
 knb <options>
 ```
