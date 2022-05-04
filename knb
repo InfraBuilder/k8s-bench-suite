@@ -110,6 +110,8 @@ RUN_TEST_P2P_TCP="true"
 RUN_TEST_P2P_UDP="true"
 RUN_TEST_P2S_TCP="true"
 RUN_TEST_P2S_UDP="true"
+RUN_TEST_N2N_TCP="true"
+RUN_TEST_N2N_UDP="true"
 
 export LC_ALL=C # Trick to no depend on locale
 BIN_AWK="awk"
@@ -176,7 +178,7 @@ function usage {
 
 	    -ot <testlist>
 	    --only-tests <testlist>     : Only run a subset of benchmark tests, comma separated (Ex: -ot tcp,idle)
-	                                  Possible values: all, tcp, udp, p2p, p2s , p2ptcp, p2pudp, p2stcp, p2sudp, idle
+	                                  Possible values: all, tcp, udp, p2p, p2s, n2n, p2ptcp, p2pudp, p2stcp, p2sudp n2ntcp, n2nudp, idle
 
 	    -sbs <size>
 	    --socket-buffer-size <size> : Set the UDP socket buffer size with unit, or 'auto'. ex: '256K' (Default: $SOCKET_BUFFER_SIZE)
@@ -275,7 +277,32 @@ function run-client {
 		*) fatal "Unknown benchmark type '$2'" ;;
 	esac
 
+	IS_NODE2NODE=${4:-"false"}
+
 	info "Starting pod $POD_NAME on node $CLIENT_NODE"
+	if [ "$IS_NODE2NODE" == "true" ]
+	then
+	cat <<-EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create pod $POD_NAME"
+	apiVersion: v1
+	kind: Pod
+	metadata:
+	  labels:
+	    app: $POD_NAME
+	  name: $POD_NAME
+	spec:
+	  containers:
+	  - name: iperf
+	    image: infrabuilder/bench-iperf3
+	    args:
+	    - /bin/sh
+	    - -c
+	    - $CMD
+	  nodeSelector:
+	    kubernetes.io/hostname: $CLIENT_NODE
+	  restartPolicy: Never
+	  hostNetwork: true
+	EOF
+	else
 	cat <<-EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create pod $POD_NAME"
 	apiVersion: v1
 	kind: Pod
@@ -295,6 +322,7 @@ function run-client {
 	    kubernetes.io/hostname: $CLIENT_NODE
 	  restartPolicy: Never
 	EOF
+	fi
 
 	RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$POD_NAME"
 
@@ -410,6 +438,16 @@ function compute-ibdbench-result {
 	compute-ibdbench-metrics $IDLE_POD_NAME
 	echo -en "\t"
 
+	# N2N TCP
+	echo -en "$(cat $DATADIR/$CLIENT_TCP_N2N_POD_NAME.bw)\t"
+	compute-ibdbench-metrics $CLIENT_TCP_N2N_POD_NAME
+	echo -en "\t"
+
+	# N2N UDP
+	echo -en "$(cat $DATADIR/$CLIENT_UDP_N2N_POD_NAME.bw)\t"
+	compute-ibdbench-metrics $CLIENT_UDP_N2N_POD_NAME
+	echo -en "\t"
+
 	# P2P TCP
 	echo -en "$(cat $DATADIR/$CLIENT_TCP_P2P_POD_NAME.bw)\t"
 	compute-ibdbench-metrics $CLIENT_TCP_P2P_POD_NAME
@@ -486,6 +524,34 @@ function compute-json-result {
 		echo "    \"idle\": {"
 		compute-json-result-for-pod $IDLE_POD_NAME 6
 		echo "    },"
+	fi
+
+	if [ "${CLIENT_TCP_N2N_POD_NAME}${CLIENT_UDP_N2N_POD_NAME}" != "" ]
+	then
+		echo "    \"node2node\": {"
+		if [ "${CLIENT_TCP_N2N_POD_NAME}" != "" ]
+		then
+			echo "      \"tcp\": {"
+			compute-json-result-for-pod $CLIENT_TCP_N2N_POD_NAME 8
+			if [ "${CLIENT_UDP_N2N_POD_NAME}" != "" ]
+			then
+				echo "      },"
+			else
+				echo "      }"
+			fi
+		fi
+		if [ "${CLIENT_UDP_N2N_POD_NAME}" != "" ]
+		then
+			echo "      \"udp\": {"
+			compute-json-result-for-pod $CLIENT_UDP_N2N_POD_NAME 8
+			echo "      }"
+		fi
+		if [ "${CLIENT_TCP_P2P_POD_NAME}" != "" ] || [ "${CLIENT_UDP_P2P_POD_NAME}" != "" ]
+		then
+			echo "    },"
+		else
+			echo "    }"
+		fi
 	fi
 
 	if [ "${CLIENT_TCP_P2P_POD_NAME}${CLIENT_UDP_P2P_POD_NAME}" != "" ]
@@ -592,6 +658,20 @@ function compute-yaml-result {
 		echo "  idle:"
 		compute-yaml-result-for-pod $IDLE_POD_NAME 4
 	fi
+	if [ "${CLIENT_TCP_N2N_POD_NAME}${CLIENT_UDP_N2N_POD_NAME}" != "" ]
+	then
+		echo "  node2node:"
+		if [ "${CLIENT_TCP_N2N_POD_NAME}" != "" ]
+		then
+			echo "    tcp:"
+			compute-yaml-result-for-pod $CLIENT_TCP_N2N_POD_NAME 6
+		fi
+		if [ "${CLIENT_UDP_N2N_POD_NAME}" != "" ]
+		then
+			echo "    udp:"
+			compute-yaml-result-for-pod $CLIENT_UDP_N2N_POD_NAME 6
+		fi
+	fi
 	if [ "${CLIENT_TCP_P2P_POD_NAME}${CLIENT_UDP_P2P_POD_NAME}" != "" ]
 	then
 		echo "  pod2pod:"
@@ -653,6 +733,22 @@ function compute-text-result {
 		echo "  Idle :"
 		compute-text-result-for-pod $IDLE_POD_NAME 4
 	fi
+
+	if [ "${CLIENT_TCP_N2N_POD_NAME}${CLIENT_UDP_N2N_POD_NAME}" != "" ]
+	then
+		echo "  Node to node :"
+		if [ "${CLIENT_TCP_N2N_POD_NAME}" != "" ]
+		then
+			echo "    TCP :"
+			compute-text-result-for-pod $CLIENT_TCP_N2N_POD_NAME 6
+		fi
+		if [ "${CLIENT_UDP_N2N_POD_NAME}" != "" ]
+		then
+			echo "    UDP :"
+			compute-text-result-for-pod $CLIENT_UDP_N2N_POD_NAME 6
+		fi
+	fi
+
 	if [ "${CLIENT_TCP_P2P_POD_NAME}${CLIENT_UDP_P2P_POD_NAME}" != "" ]
 	then
 		echo "  Pod to pod :"
@@ -707,6 +803,8 @@ function source-data-from-dir {
 	$DEBUG && debug "MONITOR_CLIENT_POD_NAME=$MONITOR_CLIENT_POD_NAME"
 	$DEBUG && debug "SERVER_POD_NAME=$SERVER_POD_NAME"
 	$DEBUG && debug "IDLE_POD_NAME=$IDLE_POD_NAME"
+	$DEBUG && debug "CLIENT_TCP_N2N_POD_NAME=$CLIENT_TCP_N2N_POD_NAME"
+	$DEBUG && debug "CLIENT_UDP_N2N_POD_NAME=$CLIENT_UDP_N2N_POD_NAME"
 	$DEBUG && debug "CLIENT_TCP_P2P_POD_NAME=$CLIENT_TCP_P2P_POD_NAME"
 	$DEBUG && debug "CLIENT_UDP_P2P_POD_NAME=$CLIENT_UDP_P2P_POD_NAME"
 	$DEBUG && debug "CLIENT_TCP_P2S_POD_NAME=$CLIENT_TCP_P2S_POD_NAME"
@@ -784,6 +882,8 @@ do
 			RUN_TEST_P2P_UDP="false"
 			RUN_TEST_P2S_TCP="false"
 			RUN_TEST_P2S_UDP="false"
+			RUN_TEST_N2N_TCP="false"
+			RUN_TEST_N2N_UDP="false"
 
 			for i in $(awk '{gsub(/,/," ");print}' <<< "$1")
 			do
@@ -793,7 +893,13 @@ do
 						RUN_TEST_P2P_UDP="true"
 						RUN_TEST_P2S_TCP="true"
 						RUN_TEST_P2S_UDP="true"
+						RUN_TEST_N2N_TCP="true"
+						RUN_TEST_N2N_UDP="true"
 						RUN_TEST_IDLE="true"
+						;;
+					n2n)
+						RUN_TEST_N2N_TCP="true"
+						RUN_TEST_N2N_UDP="true"
 						;;
 					p2p)
 						RUN_TEST_P2P_TCP="true"
@@ -804,13 +910,17 @@ do
 						RUN_TEST_P2S_UDP="true"
 						;;
 					tcp)
+						RUN_TEST_N2N_TCP="true"
 						RUN_TEST_P2P_TCP="true"
 						RUN_TEST_P2S_TCP="true"
 						;;
 					udp)
+						RUN_TEST_N2N_UDP="true"
 						RUN_TEST_P2P_UDP="true"
 						RUN_TEST_P2S_UDP="true"
 						;;
+					n2ntcp) RUN_TEST_N2N_TCP="true" ;;
+					n2nudp) RUN_TEST_N2N_UDP="true" ;;
 					p2ptcp) RUN_TEST_P2P_TCP="true" ;;
 					p2pudp) RUN_TEST_P2P_UDP="true" ;;
 					p2stcp) RUN_TEST_P2S_TCP="true" ;;
@@ -1007,16 +1117,21 @@ DATADIR="$(mktemp -d)"
 # Generating pod names
 MONITOR_SERVER_POD_NAME="knb-monitor-server-$EXECID"
 MONITOR_CLIENT_POD_NAME="knb-monitor-client-$EXECID"
-SERVER_POD_NAME="knb-server-$EXECID"
+SERVER_POD_NAME="knb-p2p-server-$EXECID"
+SERVER_NODE_NAME="knb-n2n-server-$EXECID"
 SERVER_SERVICE_NAME=$SERVER_POD_NAME
 
 IDLE_POD_NAME=""
+CLIENT_TCP_N2N_POD_NAME=""
+CLIENT_UDP_N2N_POD_NAME=""
 CLIENT_TCP_P2P_POD_NAME=""
 CLIENT_UDP_P2P_POD_NAME=""
 CLIENT_TCP_P2S_POD_NAME=""
 CLIENT_UDP_P2S_POD_NAME=""
 
 $RUN_TEST_IDLE && IDLE_POD_NAME="knb-client-idle-$EXECID"
+$RUN_TEST_P2P_TCP && CLIENT_TCP_N2N_POD_NAME="knb-client-tcp-n2n-$EXECID"
+$RUN_TEST_P2P_UDP && CLIENT_UDP_N2N_POD_NAME="knb-client-udp-n2n-$EXECID"
 $RUN_TEST_P2P_TCP && CLIENT_TCP_P2P_POD_NAME="knb-client-tcp-p2p-$EXECID"
 $RUN_TEST_P2P_UDP && CLIENT_UDP_P2P_POD_NAME="knb-client-udp-p2p-$EXECID"
 $RUN_TEST_P2S_TCP && CLIENT_TCP_P2S_POD_NAME="knb-client-tcp-p2s-$EXECID"
@@ -1036,8 +1151,11 @@ SOCKET_BUFFER_SIZE="$SOCKET_BUFFER_SIZE"
 MONITOR_SERVER_POD_NAME="$MONITOR_SERVER_POD_NAME"
 MONITOR_CLIENT_POD_NAME="$MONITOR_CLIENT_POD_NAME"
 SERVER_POD_NAME="$SERVER_POD_NAME"
+SERVER_NODE_NAME="$SERVER_NODE_NAME"
 
 IDLE_POD_NAME="$IDLE_POD_NAME"
+CLIENT_TCP_N2N_POD_NAME="$CLIENT_TCP_N2N_POD_NAME"
+CLIENT_UDP_N2N_POD_NAME="$CLIENT_UDP_N2N_POD_NAME"
 CLIENT_TCP_P2P_POD_NAME="$CLIENT_TCP_P2P_POD_NAME"
 CLIENT_UDP_P2P_POD_NAME="$CLIENT_UDP_P2P_POD_NAME"
 CLIENT_TCP_P2S_POD_NAME="$CLIENT_TCP_P2S_POD_NAME"
@@ -1102,7 +1220,7 @@ waitpod $MONITOR_CLIENT_POD_NAME Running $POD_WAIT_TIMEOUT \
 	|| detect-pod-failure-reason-and-fatal $MONITOR_CLIENT_POD_NAME "Failed to start client monitor pod"
 
 #==============================================================================
-# Starting server
+# Starting servers
 #==============================================================================
 
 info "Deploying iperf server on node $SERVER_NODE"
@@ -1150,6 +1268,40 @@ kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$SERVER_POD_NAME --timeout=
 SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_POD_NAME -o jsonpath={.status.podIP})
 $DEBUG && debug "Server IP address is $SERVER_IP"
 
+
+#==============================================================================
+# Starting node2node server
+#==============================================================================
+
+info "Deploying iperf node2node server on node $SERVER_NODE"
+cat <<EOF | kubectl apply $NAMESPACEOPT -f - >/dev/null|| fatal "Cannot create n2n server pod"
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $SERVER_NODE_NAME
+  name: $SERVER_NODE_NAME
+spec:
+  containers:
+  - name: iperf
+    image: infrabuilder/netbench:server-iperf3
+    args:
+    - iperf3
+    - -s
+  nodeSelector:
+    kubernetes.io/hostname: $SERVER_NODE
+  hostNetwork: true
+EOF
+
+RESOURCE_TO_CLEAN_BEFORE_EXIT="$RESOURCE_TO_CLEAN_BEFORE_EXIT pod/$SERVER_NODE_NAME"
+
+info "Waiting for n2n server to be running"
+kubectl wait $NAMESPACEOPT --for=condition=Ready pod/$SERVER_NODE_NAME --timeout=${POD_WAIT_TIMEOUT}s >/dev/null \
+	|| detect-pod-failure-reason-and-fatal $SERVER_NODE_NAME "Failed to start n2n server pod"
+
+N2N_SERVER_IP=$(kubectl get $NAMESPACEOPT pod $SERVER_NODE_NAME -o jsonpath={.status.podIP})
+$DEBUG && debug "N2N Server IP address is $N2N_SERVER_IP"
+
 #==============================================================================
 # Data Detection
 #==============================================================================
@@ -1195,6 +1347,22 @@ then
 	run-client $IDLE_POD_NAME $SERVER_IP idle
 else
 	info "Skipping Idle test"
+fi
+
+#--- Node to node -------------------------------------------
+
+if [ "$CLIENT_TCP_N2N_POD_NAME" != "" ]
+then
+	run-client $CLIENT_TCP_N2N_POD_NAME $N2N_SERVER_IP tcp "true"
+else
+	info "Skipping N2N TCP test"
+fi
+
+if [ "$CLIENT_UDP_N2N_POD_NAME" != "" ]
+then
+	run-client $CLIENT_UDP_N2N_POD_NAME $N2N_SERVER_IP udp "true"
+else
+	info "Skipping N2N UDP test"
 fi
 
 #--- Pod to pod -------------------------------------------
