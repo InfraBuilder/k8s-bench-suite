@@ -12,6 +12,8 @@
             "type": "bar",
             "x": [
                 if .data.idle? then "Idle" else empty end,
+                if .data.node2node.tcp? then "node2node-tcp" else empty end,
+                if .data.node2node.udp? then "node2node-udp" else empty end,
                 if .data.pod2pod.tcp? then "pod2pod-tcp" else empty end,
                 if .data.pod2pod.udp? then "pod2pod-udp" else empty end,
                 if .data.pod2svc.tcp? then "pod2svc-tcp" else empty end,
@@ -19,6 +21,8 @@
             ],
             "y": [
                 if .data.idle? then .data.idle.client.ram else empty end,
+                if .data.node2node.tcp? then .data.node2node.tcp.client.ram else empty end,
+                if .data.node2node.udp? then .data.node2node.udp.client.ram else empty end,
                 if .data.pod2pod.tcp? then .data.pod2pod.tcp.client.ram else empty end,
                 if .data.pod2pod.udp? then .data.pod2pod.udp.client.ram else empty end,
                 if .data.pod2svc.tcp? then .data.pod2svc.tcp.client.ram else empty end,
@@ -29,6 +33,8 @@
             },
             "text": [
                 if .data.idle? then .data.idle.client.ram else empty end,
+                if .data.node2node.tcp? then .data.node2node.tcp.client.ram else empty end,
+                if .data.node2node.udp? then .data.node2node.udp.client.ram else empty end,
                 if .data.pod2pod.tcp? then .data.pod2pod.tcp.client.ram else empty end,
                 if .data.pod2pod.udp? then .data.pod2pod.udp.client.ram else empty end,
                 if .data.pod2svc.tcp? then .data.pod2svc.tcp.client.ram else empty end,
@@ -53,6 +59,8 @@
             "type": "bar",
             "x": [
                 if .data.idle? then "Idle" else empty end,
+                if .data.node2node.tcp? then "node2node-tcp" else empty end,
+                if .data.node2node.udp? then "node2node-udp" else empty end,
                 if .data.pod2pod.tcp? then "pod2pod-tcp" else empty end,
                 if .data.pod2pod.udp? then "pod2pod-udp" else empty end,
                 if .data.pod2svc.tcp? then "pod2svc-tcp" else empty end,
@@ -60,6 +68,8 @@
             ],
             "y": [
                 if .data.idle? then .data.idle.server.ram else empty end,
+                if .data.node2node.tcp? then .data.node2node.tcp.server.ram else empty end,
+                if .data.node2node.udp? then .data.node2node.udp.server.ram else empty end,
                 if .data.pod2pod.tcp? then .data.pod2pod.tcp.server.ram else empty end,
                 if .data.pod2pod.udp? then .data.pod2pod.udp.server.ram else empty end,
                 if .data.pod2svc.tcp? then .data.pod2svc.tcp.server.ram else empty end,
@@ -76,6 +86,8 @@
             },
             "text": [
                 if .data.idle? then .data.idle.server.ram else empty end,
+                if .data.node2node.tcp? then .data.node2node.tcp.server.ram else empty end,
+                if .data.node2node.udp? then .data.node2node.udp.server.ram else empty end,
                 if .data.pod2pod.tcp? then .data.pod2pod.tcp.server.ram else empty end,
                 if .data.pod2pod.udp? then .data.pod2pod.udp.server.ram else empty end,
                 if .data.pod2svc.tcp? then .data.pod2svc.tcp.server.ram else empty end,
